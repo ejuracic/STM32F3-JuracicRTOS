@@ -1,3 +1,0 @@
-C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug/CMakeFiles/STM32F3-JuracicRTOS.dir
-C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug/CMakeFiles/edit_cache.dir
-C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug/CMakeFiles/rebuild_cache.dir
