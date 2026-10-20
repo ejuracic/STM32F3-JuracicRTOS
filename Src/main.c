@@ -17,10 +17,13 @@
  */
 
  #include <stdint.h>
- 
+
 #define RCC_AHBENR   (*(volatile uint32_t *)0x40021014UL)
 #define GPIOE_MODER  (*(volatile uint32_t *)0x48001000UL)
 #define GPIOE_BSRR   (*(volatile uint32_t *)0x48001018UL)
+
+// Function Prototypes
+static void delay(void);
 
 int main(void)
 {
@@ -37,5 +40,23 @@ int main(void)
     /* Keep the program running */
     for (;;)
     {
+        // Toggle the LED
+        GPIOE_BSRR = (1UL << 8);   // LED ON
+        delay();
+
+        GPIOE_BSRR = (1UL << 24);  // LED OFF
+        delay();
+    }
+}
+
+// Name: delay
+// Description: Simple delay function to create a time gap between LED toggles
+// Parameters: None
+// Returns: None
+static void delay(void)
+{
+    for (volatile uint32_t i = 0; i < 1000000UL; i++)
+    {
+        // Wait
     }
 }
