@@ -1,0 +1,26 @@
+[
+{
+  "directory": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug",
+  "command": "C:\\Users\\emanu\\AppData\\Local\\stm32cube\\bundles\\gnu-tools-for-stm32\\14.3.1+st.2\\bin\\arm-none-eabi-gcc.exe -DDEBUG -DRTE_DEVICE_STARTUP_STM32F3XX -IC:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/Inc -fdata-sections -ffunction-sections -Wl,--gc-sections -Wno-comment -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mlittle-endian -mthumb -std=gnu11 -fstack-usage -Wall -Wextra -Wpedantic -Wno-unused-parameter -O0 -g3 -ggdb -o CMakeFiles\\STM32F3-JuracicRTOS.dir\\Src\\syscall.c.obj -c C:\\Users\\emanu\\Desktop\\JuracicRTOS\\STM32F3-JuracicRTOS\\Src\\syscall.c",
+  "file": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/Src/syscall.c",
+  "output": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug/CMakeFiles/STM32F3-JuracicRTOS.dir/Src/syscall.c.obj"
+},
+{
+  "directory": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug",
+  "command": "C:\\Users\\emanu\\AppData\\Local\\stm32cube\\bundles\\gnu-tools-for-stm32\\14.3.1+st.2\\bin\\arm-none-eabi-gcc.exe -DDEBUG -DRTE_DEVICE_STARTUP_STM32F3XX -IC:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/Inc -fdata-sections -ffunction-sections -Wl,--gc-sections -Wno-comment -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mlittle-endian -mthumb -std=gnu11 -fstack-usage -Wall -Wextra -Wpedantic -Wno-unused-parameter -O0 -g3 -ggdb -o CMakeFiles\\STM32F3-JuracicRTOS.dir\\Src\\sysmem.c.obj -c C:\\Users\\emanu\\Desktop\\JuracicRTOS\\STM32F3-JuracicRTOS\\Src\\sysmem.c",
+  "file": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/Src/sysmem.c",
+  "output": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug/CMakeFiles/STM32F3-JuracicRTOS.dir/Src/sysmem.c.obj"
+},
+{
+  "directory": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug",
+  "command": "C:\\Users\\emanu\\AppData\\Local\\stm32cube\\bundles\\gnu-tools-for-stm32\\14.3.1+st.2\\bin\\arm-none-eabi-gcc.exe -DDEBUG -DRTE_DEVICE_STARTUP_STM32F3XX -IC:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/Inc -fdata-sections -ffunction-sections -Wl,--gc-sections -Wno-comment -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mlittle-endian -mthumb -std=gnu11 -fstack-usage -Wall -Wextra -Wpedantic -Wno-unused-parameter -O0 -g3 -ggdb -o CMakeFiles\\STM32F3-JuracicRTOS.dir\\Src\\main.c.obj -c C:\\Users\\emanu\\Desktop\\JuracicRTOS\\STM32F3-JuracicRTOS\\Src\\main.c",
+  "file": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/Src/main.c",
+  "output": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug/CMakeFiles/STM32F3-JuracicRTOS.dir/Src/main.c.obj"
+},
+{
+  "directory": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug",
+  "command": "C:\\Users\\emanu\\AppData\\Local\\stm32cube\\bundles\\gnu-tools-for-stm32\\14.3.1+st.2\\bin\\arm-none-eabi-gcc.exe -DDEBUG -DRTE_DEVICE_STARTUP_STM32F3XX -IC:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/Inc -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mlittle-endian -mthumb -std=gnu11 -fstack-usage -Wall -Wextra -Wpedantic -Wno-unused-parameter -O0 -g3 -ggdb -x assembler-with-cpp -MMD -MP -o CMakeFiles\\STM32F3-JuracicRTOS.dir\\Src\\startup_stm32f303xx.S.obj -c C:\\Users\\emanu\\Desktop\\JuracicRTOS\\STM32F3-JuracicRTOS\\Src\\startup_stm32f303xx.S",
+  "file": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/Src/startup_stm32f303xx.S",
+  "output": "C:/Users/emanu/Desktop/JuracicRTOS/STM32F3-JuracicRTOS/build/Debug/CMakeFiles/STM32F3-JuracicRTOS.dir/Src/startup_stm32f303xx.S.obj"
+}
+]
