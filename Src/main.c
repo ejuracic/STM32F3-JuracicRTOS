@@ -16,10 +16,26 @@
  ******************************************************************************
  */
 
-#include <stdint.h>
+ #include <stdint.h>
+ 
+#define RCC_AHBENR   (*(volatile uint32_t *)0x40021014UL)
+#define GPIOE_MODER  (*(volatile uint32_t *)0x48001000UL)
+#define GPIOE_BSRR   (*(volatile uint32_t *)0x48001018UL)
 
 int main(void)
 {
-    /* Loop forever */
-	for(;;);
+    /* 1. Enable clock for GPIO Port E */
+    RCC_AHBENR |= (1UL << 21);
+
+    /* 2. Configure PE8 as a general-purpose output */
+    GPIOE_MODER &= ~(3UL << 16);
+    GPIOE_MODER |=  (1UL << 16);
+
+    /* 3. Set PE8 HIGH to turn on the blue LED */
+    GPIOE_BSRR = (1UL << 8);
+
+    /* Keep the program running */
+    for (;;)
+    {
+    }
 }
