@@ -76,6 +76,9 @@ int main(void)
                 led_on = 0U;
             }
         }
+
+        /* Sleep until an interrupt occurs */
+        __asm volatile ("wfi");
     }
 }
 
