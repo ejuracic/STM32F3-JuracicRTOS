@@ -18,12 +18,22 @@
 
  #include <stdint.h>
 
+ // Define memory-mapped register addresses for GPIO Port E and RCC
 #define RCC_AHBENR   (*(volatile uint32_t *)0x40021014UL)
 #define GPIOE_MODER  (*(volatile uint32_t *)0x48001000UL)
 #define GPIOE_BSRR   (*(volatile uint32_t *)0x48001018UL)
 
-// Function Prototypes
-static void delay(void);
+// Define memory-mapped register addresses for SysTick Timer
+#define SYST_CSR      (*(volatile uint32_t *)0xE000E010UL)
+#define SYST_RVR      (*(volatile uint32_t *)0xE000E014UL)
+#define SYST_CVR      (*(volatile uint32_t *)0xE000E018UL)  
+
+// Timing Configuration
+#define CPU_CLOCK_HZ 8000000UL
+#define TICK_RATE_HZ 1000UL
+
+// Milliseconds since SysTick was enabled
+static volatile uint32_t g_milliseconds = 0U;
 
 int main(void)
 {
@@ -37,26 +47,43 @@ int main(void)
     /* 3. Set PE8 HIGH to turn on the blue LED */
     GPIOE_BSRR = (1UL << 8);
 
-    /* Keep the program running */
+
+    /* 4. Configure SysTick for a 1 ms interrupt */
+    SYST_RVR = (CPU_CLOCK_HZ / TICK_RATE_HZ) - 1UL;
+    SYST_CVR = 0U;
+
+    /* Enable timer, interrupt, and processor clock */
+    SYST_CSR = (1UL << 2) | (1UL << 1) | (1UL << 0);
+
+    uint32_t last_toggle = 0U;
+    uint8_t led_on = 0U;
+
+    /* 5. Main program loop */
     for (;;)
     {
-        // Toggle the LED
-        GPIOE_BSRR = (1UL << 8);   // LED ON
-        delay();
+        if ((uint32_t)(g_milliseconds - last_toggle) >= 500U)
+        {
+            last_toggle = g_milliseconds;
 
-        GPIOE_BSRR = (1UL << 24);  // LED OFF
-        delay();
+            if (led_on == 0U)
+            {
+                GPIOE_BSRR = (1UL << 8);
+                led_on = 1U;
+            }
+            else
+            {
+                GPIOE_BSRR = (1UL << 24);
+                led_on = 0U;
+            }
+        }
     }
 }
 
-// Name: delay
-// Description: Simple delay function to create a time gap between LED toggles
+// Name: SysTick_Handler
+// Description: This function is the interrupt handler for the SysTick timer. It increments the global millisecond counter each time the SysTick interrupt occurs, which is configured to happen every 1 millisecond.
 // Parameters: None
 // Returns: None
-static void delay(void)
+void SysTick_Handler(void)
 {
-    for (volatile uint32_t i = 0; i < 1000000UL; i++)
-    {
-        // Wait
-    }
+    g_milliseconds++;
 }
