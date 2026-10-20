@@ -1,0 +1,24 @@
+# Build directories
+build/
+cmake-build-*/
+
+# Compiled firmware files
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.d
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Temporary files
+*.log
+*.tmp
+*~
+.DS_Store
+Thumbs.db
