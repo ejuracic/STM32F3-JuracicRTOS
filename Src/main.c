@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include "gpio.h"
 #include "systick.h"
+#include "uart.h"
 
 // Timing configuration
 #define LED_BLINK_INTERVAL_MS 500U
@@ -145,7 +146,12 @@ int main(void)
     gpio_button_init();
     systick_init();
 
+    // Initialize UART communication
+    uart_init();
+    uart_write_string("JuracicRTOS UART initialized\r\n");
+
     uint32_t now = systick_get_milliseconds();
+    uint32_t last_report_ms = now;
     uint8_t initial_button = gpio_button_is_pressed();
 
     // Initialize system state
@@ -197,6 +203,50 @@ int main(void)
             led_set(&state, (state.led_on == 0U) ? 1U : 0U);
         }
 
+        // Transmit system status once per second
+        if ((uint32_t)(now - last_report_ms) >= 1000U)
+        {
+            last_report_ms = now;
+
+            uart_write_string("\r\n=== JuracicRTOS ===\r\n");
+
+            uart_write_string("Uptime: ");
+            uart_write_uint32(state.uptime_ms);
+            uart_write_string(" ms\r\n");
+
+            uart_write_string("LED Mode: ");
+
+            switch (state.mode)
+            {
+                case LED_MODE_BLINK:
+                    uart_write_string("BLINK\r\n");
+                    break;
+
+                case LED_MODE_ON:
+                    uart_write_string("ON\r\n");
+                    break;
+
+                case LED_MODE_OFF:
+                    uart_write_string("OFF\r\n");
+                    break;
+
+                default:
+                    uart_write_string("UNKNOWN\r\n");
+                    break;
+            }
+
+            uart_write_string("LED State: ");
+            uart_write_string(state.led_on ? "ON\r\n" : "OFF\r\n");
+
+            uart_write_string("Button Presses: ");
+            uart_write_uint32(state.button_press_count);
+            uart_write_string("\r\n");
+
+            uart_write_string("Button State: ");
+            uart_write_string(
+                state.button_pressed ? "PRESSED\r\n" : "RELEASED\r\n"
+            );
+        }
         // Sleep until the next interrupt
         __asm volatile ("wfi");
     }

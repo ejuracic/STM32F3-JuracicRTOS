@@ -33,6 +33,7 @@ target_sources(${PROJECT_NAME} PRIVATE
   # User defined sources
   Src/systick.c
   Src/gpio.c
+  Src/uart.c
 )
 
 # Add include directories
