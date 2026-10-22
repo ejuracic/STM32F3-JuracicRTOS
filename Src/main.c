@@ -16,10 +16,39 @@
  ******************************************************************************
  */
 
+ 
+
 #include <stdint.h>
+#include "gpio.h"
+#include "systick.h"
 
 int main(void)
 {
-    /* Loop forever */
-	for(;;);
+    // Initialize GPIO for the blue LED
+    gpio_led_init();
+
+    // Initialize GPIO for the USER button
+    gpio_button_init();
+
+    // Initialize SysTick for 1 millisecond interrupts
+    systick_init();
+
+    // Main program loop
+    for (;;)
+    {
+        // Check if the USER button is pressed
+        if (gpio_button_is_pressed() != 0U)
+        {
+            // Turn LED on when button is pressed
+            gpio_led_on();
+        }
+        else
+        {
+            // Turn LED off when button is released
+            gpio_led_off();
+        }
+
+        // Sleep until an interrupt occurs
+        __asm volatile ("wfi");
+    }
 }
