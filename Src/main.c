@@ -16,49 +16,38 @@
  ******************************************************************************
  */
 
- #include <stdint.h>
+ 
+#include <stdint.h>
+#include "gpio.h"
 
- // Define memory-mapped register addresses for GPIO Port E and RCC
-#define RCC_AHBENR   (*(volatile uint32_t *)0x40021014UL)
-#define GPIOE_MODER  (*(volatile uint32_t *)0x48001000UL)
-#define GPIOE_BSRR   (*(volatile uint32_t *)0x48001018UL)
+// SysTick register addresses
+#define SYST_CSR     (*(volatile uint32_t *)0xE000E010UL)
+#define SYST_RVR     (*(volatile uint32_t *)0xE000E014UL)
+#define SYST_CVR     (*(volatile uint32_t *)0xE000E018UL)
 
-// Define memory-mapped register addresses for SysTick Timer
-#define SYST_CSR      (*(volatile uint32_t *)0xE000E010UL)
-#define SYST_RVR      (*(volatile uint32_t *)0xE000E014UL)
-#define SYST_CVR      (*(volatile uint32_t *)0xE000E018UL)  
-
-// Timing Configuration
-#define CPU_CLOCK_HZ 8000000UL
-#define TICK_RATE_HZ 1000UL
+// Timing configuration
+#define CPU_CLOCK_HZ  8000000UL
+#define TICK_RATE_HZ  1000UL
 
 // Milliseconds since SysTick was enabled
 static volatile uint32_t g_milliseconds = 0U;
 
 int main(void)
 {
-    /* 1. Enable clock for GPIO Port E */
-    RCC_AHBENR |= (1UL << 21);
+    // Initialize GPIO for the blue LED
+    gpio_led_init();
 
-    /* 2. Configure PE8 as a general-purpose output */
-    GPIOE_MODER &= ~(3UL << 16);
-    GPIOE_MODER |=  (1UL << 16);
-
-    /* 3. Set PE8 HIGH to turn on the blue LED */
-    GPIOE_BSRR = (1UL << 8);
-
-
-    /* 4. Configure SysTick for a 1 ms interrupt */
+    // Configure SysTick for a 1 ms interrupt
     SYST_RVR = (CPU_CLOCK_HZ / TICK_RATE_HZ) - 1UL;
     SYST_CVR = 0U;
 
-    /* Enable timer, interrupt, and processor clock */
+    // Enable SysTick, its interrupt, and the processor clock
     SYST_CSR = (1UL << 2) | (1UL << 1) | (1UL << 0);
 
     uint32_t last_toggle = 0U;
     uint8_t led_on = 0U;
 
-    /* 5. Main program loop */
+    // Main program loop
     for (;;)
     {
         if ((uint32_t)(g_milliseconds - last_toggle) >= 500U)
@@ -67,17 +56,17 @@ int main(void)
 
             if (led_on == 0U)
             {
-                GPIOE_BSRR = (1UL << 8);
+                gpio_led_on();
                 led_on = 1U;
             }
             else
             {
-                GPIOE_BSRR = (1UL << 24);
+                gpio_led_off();
                 led_on = 0U;
             }
         }
 
-        /* Sleep until an interrupt occurs */
+        // Sleep until an interrupt occurs
         __asm volatile ("wfi");
     }
 }
