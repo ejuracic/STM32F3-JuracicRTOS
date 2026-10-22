@@ -22,6 +22,7 @@
 #include "gpio.h"
 #include "systick.h"
 #include "uart.h"
+#include "adc.h"
 
 // Timing configuration
 #define LED_BLINK_INTERVAL_MS 500U
@@ -44,6 +45,10 @@ typedef struct
     uint32_t button_press_count;
     uint32_t uptime_ms;
     uint32_t last_toggle_ms;
+    uint16_t temperature_adc_raw;
+    int32_t temperature_c;
+    uint16_t vrefint_adc_raw;
+    uint32_t vdda_mv;
 } SystemState;
 
 // Button debounce information
@@ -148,6 +153,10 @@ int main(void)
 
     // Initialize UART communication
     uart_init();
+
+    // Initialize ADC and internal temperature sensor
+    adc_temperature_init();
+    
     uart_write_string("JuracicRTOS UART initialized\r\n");
 
     uint32_t now = systick_get_milliseconds();
@@ -161,7 +170,11 @@ int main(void)
         .button_pressed = initial_button,
         .button_press_count = 0U,
         .uptime_ms = now,
-        .last_toggle_ms = now
+        .last_toggle_ms = now,
+        .temperature_adc_raw = 0U,
+        .temperature_c = 0,
+        .vrefint_adc_raw = 0U,
+        .vdda_mv = 0U
     };
 
     // Initialize button debounce state
@@ -207,6 +220,21 @@ int main(void)
         if ((uint32_t)(now - last_report_ms) >= 1000U)
         {
             last_report_ms = now;
+            
+            // Read internal temperature sensor
+            state.temperature_adc_raw = adc_temperature_read_raw();
+
+            // Read internal voltage reference
+            state.vrefint_adc_raw = adc_vrefint_read_raw();
+
+            // Calculate analog supply voltage
+            state.vdda_mv = adc_get_vdda_mv(state.vrefint_adc_raw);
+
+            // Calculate temperature using voltage compensation
+            state.temperature_c = adc_temperature_celsius(
+                state.temperature_adc_raw,
+                state.vrefint_adc_raw
+            );
 
             uart_write_string("\r\n=== JuracicRTOS ===\r\n");
 
@@ -246,6 +274,40 @@ int main(void)
             uart_write_string(
                 state.button_pressed ? "PRESSED\r\n" : "RELEASED\r\n"
             );
+
+            // Report raw temperature sensor ADC reading
+            uart_write_string("Temperature ADC: ");
+            uart_write_uint32(state.temperature_adc_raw);
+            uart_write_string("\r\n");
+            // Report internal voltage reference ADC reading
+            uart_write_string("VREFINT ADC: ");
+            uart_write_uint32(state.vrefint_adc_raw);
+            uart_write_string("\r\n");
+
+            // Report estimated analog supply voltage
+            uart_write_string("Analog Supply: ");
+
+            if (state.vdda_mv != 0U)
+            {
+                uart_write_uint32(state.vdda_mv);
+                uart_write_string(" mV\r\n");
+            }
+            else
+            {
+                uart_write_string("INVALID\r\n");
+            }
+
+            uart_write_string("MCU Temperature: ");
+
+            if (state.vrefint_adc_raw != 0U)
+            {
+                uart_write_int32(state.temperature_c);
+                uart_write_string(" C\r\n");
+            }
+            else
+            {
+                uart_write_string("INVALID\r\n");
+            }
         }
         // Sleep until the next interrupt
         __asm volatile ("wfi");

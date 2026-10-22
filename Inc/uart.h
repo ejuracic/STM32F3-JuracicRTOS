@@ -21,4 +21,10 @@ void uart_write_string(const char *str);
 // Returns: None
 void uart_write_uint32(uint32_t value);
 
+// Name: uart_write_int32
+// Description: Transmits a signed 32-bit integer as decimal text.
+// Parameters: value - Signed integer to transmit.
+// Returns: None
+void uart_write_int32(int32_t value);
+
 #endif

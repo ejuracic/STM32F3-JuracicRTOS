@@ -114,3 +114,24 @@ void uart_write_uint32(uint32_t value)
         uart_write_char(digits[--count]);
     }
 }
+
+
+// Name: uart_write_int32
+// Description: Transmits a signed 32-bit integer over USART1.
+// Parameters: value - Signed integer to transmit.
+// Returns: None
+void uart_write_int32(int32_t value)
+{
+    if (value < 0)
+    {
+        uart_write_string("-");
+
+        // Use int64_t to safely negate the minimum int32_t value
+        uart_write_uint32((uint32_t)(-(int64_t)value));
+    }
+    else
+    {
+        uart_write_uint32((uint32_t)value);
+    }
+}
+
