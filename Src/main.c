@@ -23,6 +23,7 @@
 #include "systick.h"
 #include "uart.h"
 #include "adc.h"
+#include "gyro.h"
 
 // Timing configuration
 #define LED_BLINK_INTERVAL_MS 500U
@@ -49,6 +50,9 @@ typedef struct
     int32_t temperature_c;
     uint16_t vrefint_adc_raw;
     uint32_t vdda_mv;
+    uint8_t gyro_id;
+    uint8_t gyro_ready;
+    GyroAxes gyro_axes;
 } SystemState;
 
 // Button debounce information
@@ -156,8 +160,11 @@ int main(void)
 
     // Initialize ADC and internal temperature sensor
     adc_temperature_init();
+
+    // Initialize SPI gyroscope
+    uint8_t detected_gyro_id = gyro_init();
     
-    uart_write_string("JuracicRTOS UART initialized\r\n");
+    uart_write_string("JuracicRTOS initialized\r\n");
 
     uint32_t now = systick_get_milliseconds();
     uint32_t last_report_ms = now;
@@ -174,7 +181,11 @@ int main(void)
         .temperature_adc_raw = 0U,
         .temperature_c = 0,
         .vrefint_adc_raw = 0U,
-        .vdda_mv = 0U
+        .vdda_mv = 0U,
+        .gyro_id = detected_gyro_id,
+        .gyro_ready = (detected_gyro_id == 0xD4U ||
+                    detected_gyro_id == 0xD3U) ? 1U : 0U,
+        .gyro_axes = {0}
     };
 
     // Initialize button debounce state
@@ -187,12 +198,30 @@ int main(void)
     // Start in blinking mode
     led_set(&state, 1U);
 
+    // Track time between gyroscope measurements
+    uint32_t last_gyro_sample_ms = now;
+
     for (;;)
     {
         now = systick_get_milliseconds();
 
         // Update system uptime
         state.uptime_ms = now;
+
+        // Sample gyroscope every 100 milliseconds
+        if ((uint32_t)(now - last_gyro_sample_ms) >= 100U)
+        {
+            last_gyro_sample_ms = now;
+
+            if (state.gyro_ready != 0U)
+            {
+                // Read and store the latest X, Y, and Z values
+                if (gyro_read_axes(&state.gyro_axes) == 0U)
+                {
+                    state.gyro_ready = 0U;
+                }
+            }
+        }
 
         // Check for a debounced button press
         if (button_update(&button, now) != 0U)
@@ -308,6 +337,33 @@ int main(void)
             {
                 uart_write_string("INVALID\r\n");
             }
+
+
+            // Report detected gyroscope identification
+            uart_write_string("Gyroscope ID: ");
+            uart_write_uint32(state.gyro_id);
+            uart_write_string("\r\n");
+
+            if (state.gyro_ready != 0U)
+            {
+                // Report raw angular-rate measurements
+                uart_write_string("Gyro X: ");
+                uart_write_int32(state.gyro_axes.x);
+                uart_write_string("\r\n");
+
+                uart_write_string("Gyro Y: ");
+                uart_write_int32(state.gyro_axes.y);
+                uart_write_string("\r\n");
+
+                uart_write_string("Gyro Z: ");
+                uart_write_int32(state.gyro_axes.z);
+                uart_write_string("\r\n");
+            }
+            else
+            {
+                uart_write_string("Gyroscope: NOT READY\r\n");
+            }
+
         }
         // Sleep until the next interrupt
         __asm volatile ("wfi");
