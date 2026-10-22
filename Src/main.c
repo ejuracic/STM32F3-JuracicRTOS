@@ -22,33 +22,182 @@
 #include "gpio.h"
 #include "systick.h"
 
+// Timing configuration
+#define LED_BLINK_INTERVAL_MS 500U
+#define BUTTON_DEBOUNCE_MS 30U
+
+// LED operating modes
+typedef enum
+{
+    LED_MODE_BLINK = 0,
+    LED_MODE_ON,
+    LED_MODE_OFF
+} LedMode;
+
+// System state information
+typedef struct
+{
+    LedMode mode;
+    uint8_t led_on;
+    uint8_t button_pressed;
+    uint32_t button_press_count;
+    uint32_t uptime_ms;
+    uint32_t last_toggle_ms;
+} SystemState;
+
+// Button debounce information
+typedef struct
+{
+    uint8_t raw_state;
+    uint8_t stable_state;
+    uint32_t last_change_ms;
+} ButtonDebouncer;
+
+// Name: led_set
+// Description: Controls the blue LED and updates the system state.
+// Parameters: state - Pointer to the system state.
+//             on - Desired LED state (1 = ON, 0 = OFF).
+// Returns: None
+static void led_set(SystemState *state, uint8_t on)
+{
+    if (on != 0U)
+    {
+        gpio_led_on();
+        state->led_on = 1U;
+    }
+    else
+    {
+        gpio_led_off();
+        state->led_on = 0U;
+    }
+}
+
+// Name: button_update
+// Description: Debounces the USER button and detects new press events.
+// Parameters: button - Pointer to the button debounce state.
+//             now - Current system time in milliseconds.
+// Returns: 1 when a new stable button press is detected,
+//          0 otherwise.
+static uint8_t button_update(ButtonDebouncer *button, uint32_t now)
+{
+    uint8_t raw = gpio_button_is_pressed();
+
+    // Detect changes in the raw button signal
+    if (raw != button->raw_state)
+    {
+        button->raw_state = raw;
+        button->last_change_ms = now;
+    }
+
+    // Accept a new state only after the debounce interval
+    if ((button->stable_state != button->raw_state) &&
+        ((uint32_t)(now - button->last_change_ms) >= BUTTON_DEBOUNCE_MS))
+    {
+        button->stable_state = button->raw_state;
+
+        // Only report a newly confirmed button press
+        return button->stable_state;
+    }
+
+    return 0U;
+}
+
+// Name: led_next_mode
+// Description: Cycles through the LED operating modes and updates
+//              the LED output according to the newly selected mode.
+// Parameters: state - Pointer to the system state.
+//             now - Current system time in milliseconds.
+// Returns: None
+static void led_next_mode(SystemState *state, uint32_t now)
+{
+    switch (state->mode)
+    {
+        case LED_MODE_BLINK:
+            state->mode = LED_MODE_ON;
+            break;
+
+        case LED_MODE_ON:
+            state->mode = LED_MODE_OFF;
+            break;
+
+        case LED_MODE_OFF:
+        default:
+            state->mode = LED_MODE_BLINK;
+            break;
+    }
+
+    state->last_toggle_ms = now;
+
+    if (state->mode == LED_MODE_OFF)
+    {
+        led_set(state, 0U);
+    }
+    else
+    {
+        led_set(state, 1U);
+    }
+}
+
 int main(void)
 {
-    // Initialize GPIO for the blue LED
+    // Initialize hardware drivers
     gpio_led_init();
-
-    // Initialize GPIO for the USER button
     gpio_button_init();
-
-    // Initialize SysTick for 1 millisecond interrupts
     systick_init();
 
-    // Main program loop
+    uint32_t now = systick_get_milliseconds();
+    uint8_t initial_button = gpio_button_is_pressed();
+
+    // Initialize system state
+    SystemState state = {
+        .mode = LED_MODE_BLINK,
+        .led_on = 0U,
+        .button_pressed = initial_button,
+        .button_press_count = 0U,
+        .uptime_ms = now,
+        .last_toggle_ms = now
+    };
+
+    // Initialize button debounce state
+    ButtonDebouncer button = {
+        .raw_state = initial_button,
+        .stable_state = initial_button,
+        .last_change_ms = now
+    };
+
+    // Start in blinking mode
+    led_set(&state, 1U);
+
     for (;;)
     {
-        // Check if the USER button is pressed
-        if (gpio_button_is_pressed() != 0U)
+        now = systick_get_milliseconds();
+
+        // Update system uptime
+        state.uptime_ms = now;
+
+        // Check for a debounced button press
+        if (button_update(&button, now) != 0U)
         {
-            // Turn LED on when button is pressed
-            gpio_led_on();
-        }
-        else
-        {
-            // Turn LED off when button is released
-            gpio_led_off();
+            state.button_press_count++;
+
+            // Switch to the next LED operating mode
+            led_next_mode(&state, now);
         }
 
-        // Sleep until an interrupt occurs
+        // Store the confirmed button state
+        state.button_pressed = button.stable_state;
+
+        // Handle automatic blinking
+        if ((state.mode == LED_MODE_BLINK) &&
+            ((uint32_t)(now - state.last_toggle_ms) >= LED_BLINK_INTERVAL_MS))
+        {
+            state.last_toggle_ms = now;
+
+            // Toggle the existing LED state
+            led_set(&state, (state.led_on == 0U) ? 1U : 0U);
+        }
+
+        // Sleep until the next interrupt
         __asm volatile ("wfi");
     }
 }
