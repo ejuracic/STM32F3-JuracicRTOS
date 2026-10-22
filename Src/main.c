@@ -27,31 +27,25 @@ int main(void)
     // Initialize GPIO for the blue LED
     gpio_led_init();
 
+    // Initialize GPIO for the USER button
+    gpio_button_init();
+
     // Initialize SysTick for 1 millisecond interrupts
     systick_init();
-
-    uint32_t last_toggle = 0U;
-    uint8_t led_on = 0U;
 
     // Main program loop
     for (;;)
     {
-        // Check if 500 milliseconds have elapsed
-        if ((uint32_t)(systick_get_milliseconds() - last_toggle) >= 500U)
+        // Check if the USER button is pressed
+        if (gpio_button_is_pressed() != 0U)
         {
-            // Update the last toggle time
-            last_toggle = systick_get_milliseconds();
-
-            if (led_on == 0U)
-            {
-                gpio_led_on();
-                led_on = 1U;
-            }
-            else
-            {
-                gpio_led_off();
-                led_on = 0U;
-            }
+            // Turn LED on when button is pressed
+            gpio_led_on();
+        }
+        else
+        {
+            // Turn LED off when button is released
+            gpio_led_off();
         }
 
         // Sleep until an interrupt occurs
