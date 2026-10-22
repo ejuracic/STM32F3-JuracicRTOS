@@ -17,32 +17,18 @@
  */
 
  
+
 #include <stdint.h>
 #include "gpio.h"
-
-// SysTick register addresses
-#define SYST_CSR     (*(volatile uint32_t *)0xE000E010UL)
-#define SYST_RVR     (*(volatile uint32_t *)0xE000E014UL)
-#define SYST_CVR     (*(volatile uint32_t *)0xE000E018UL)
-
-// Timing configuration
-#define CPU_CLOCK_HZ  8000000UL
-#define TICK_RATE_HZ  1000UL
-
-// Milliseconds since SysTick was enabled
-static volatile uint32_t g_milliseconds = 0U;
+#include "systick.h"
 
 int main(void)
 {
     // Initialize GPIO for the blue LED
     gpio_led_init();
 
-    // Configure SysTick for a 1 ms interrupt
-    SYST_RVR = (CPU_CLOCK_HZ / TICK_RATE_HZ) - 1UL;
-    SYST_CVR = 0U;
-
-    // Enable SysTick, its interrupt, and the processor clock
-    SYST_CSR = (1UL << 2) | (1UL << 1) | (1UL << 0);
+    // Initialize SysTick for 1 millisecond interrupts
+    systick_init();
 
     uint32_t last_toggle = 0U;
     uint8_t led_on = 0U;
@@ -50,9 +36,11 @@ int main(void)
     // Main program loop
     for (;;)
     {
-        if ((uint32_t)(g_milliseconds - last_toggle) >= 500U)
+        // Check if 500 milliseconds have elapsed
+        if ((uint32_t)(systick_get_milliseconds() - last_toggle) >= 500U)
         {
-            last_toggle = g_milliseconds;
+            // Update the last toggle time
+            last_toggle = systick_get_milliseconds();
 
             if (led_on == 0U)
             {
@@ -69,13 +57,4 @@ int main(void)
         // Sleep until an interrupt occurs
         __asm volatile ("wfi");
     }
-}
-
-// Name: SysTick_Handler
-// Description: This function is the interrupt handler for the SysTick timer. It increments the global millisecond counter each time the SysTick interrupt occurs, which is configured to happen every 1 millisecond.
-// Parameters: None
-// Returns: None
-void SysTick_Handler(void)
-{
-    g_milliseconds++;
 }
