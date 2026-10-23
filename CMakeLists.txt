@@ -37,6 +37,7 @@ target_sources(${PROJECT_NAME} PRIVATE
   Src/adc.c
   Src/spi.c
   Src/gyro.c
+  Src/gyro_processing.c
 )
 
 # Add include directories

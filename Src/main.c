@@ -24,6 +24,7 @@
 #include "uart.h"
 #include "adc.h"
 #include "gyro.h"
+#include "gyro_processing.h"
 
 // Timing configuration
 #define LED_BLINK_INTERVAL_MS 500U
@@ -195,6 +196,10 @@ int main(void)
         .last_change_ms = now
     };
 
+    // Initialize gyroscope calibration and filtering
+    GyroProcessor gyro_processing;
+    gyro_processor_init(&gyro_processing);
+
     // Start in blinking mode
     led_set(&state, 1U);
 
@@ -208,6 +213,7 @@ int main(void)
         // Update system uptime
         state.uptime_ms = now;
 
+ 
         // Sample gyroscope every 100 milliseconds
         if ((uint32_t)(now - last_gyro_sample_ms) >= 100U)
         {
@@ -215,13 +221,19 @@ int main(void)
 
             if (state.gyro_ready != 0U)
             {
-                // Read and store the latest X, Y, and Z values
-                if (gyro_read_axes(&state.gyro_axes) == 0U)
+                // Read the latest gyroscope measurements
+                if (gyro_read_axes(&state.gyro_axes) != 0U)
+                {
+                    // Update calibration and filtered measurements
+                    gyro_processor_update(&gyro_processing, &state.gyro_axes);
+                }
+                else
                 {
                     state.gyro_ready = 0U;
                 }
             }
         }
+
 
         // Check for a debounced button press
         if (button_update(&button, now) != 0U)
@@ -344,24 +356,78 @@ int main(void)
             uart_write_uint32(state.gyro_id);
             uart_write_string("\r\n");
 
+            // Report raw gyroscope measurements
             if (state.gyro_ready != 0U)
             {
-                // Report raw angular-rate measurements
-                uart_write_string("Gyro X: ");
+                uart_write_string("Raw Gyro X: ");
                 uart_write_int32(state.gyro_axes.x);
                 uart_write_string("\r\n");
 
-                uart_write_string("Gyro Y: ");
+                uart_write_string("Raw Gyro Y: ");
                 uart_write_int32(state.gyro_axes.y);
                 uart_write_string("\r\n");
 
-                uart_write_string("Gyro Z: ");
+                uart_write_string("Raw Gyro Z: ");
                 uart_write_int32(state.gyro_axes.z);
                 uart_write_string("\r\n");
             }
             else
             {
                 uart_write_string("Gyroscope: NOT READY\r\n");
+            }
+
+
+            // Report gyroscope calibration status
+            uart_write_string("Gyro Calibration: ");
+
+            if (gyro_processing.calibrated == 0U)
+            {
+                uart_write_string("IN PROGRESS (");
+                uart_write_uint32(gyro_processing.samples_collected);
+                uart_write_string("/64)\r\n");
+            }
+            else
+            {
+                uart_write_string("COMPLETE\r\n");
+
+                // Report calculated stationary offsets
+                uart_write_string("Gyro Offset X: ");
+                uart_write_int32(gyro_processing.offset_x);
+                uart_write_string("\r\n");
+
+                uart_write_string("Gyro Offset Y: ");
+                uart_write_int32(gyro_processing.offset_y);
+                uart_write_string("\r\n");
+
+                uart_write_string("Gyro Offset Z: ");
+                uart_write_int32(gyro_processing.offset_z);
+                uart_write_string("\r\n");
+
+                // Report calibrated values
+                uart_write_string("Calibrated X: ");
+                uart_write_int32(gyro_processing.calibrated_x);
+                uart_write_string("\r\n");
+
+                uart_write_string("Calibrated Y: ");
+                uart_write_int32(gyro_processing.calibrated_y);
+                uart_write_string("\r\n");
+
+                uart_write_string("Calibrated Z: ");
+                uart_write_int32(gyro_processing.calibrated_z);
+                uart_write_string("\r\n");
+
+                // Report filtered values
+                uart_write_string("Filtered X: ");
+                uart_write_int32(gyro_processing.filtered_x);
+                uart_write_string("\r\n");
+
+                uart_write_string("Filtered Y: ");
+                uart_write_int32(gyro_processing.filtered_y);
+                uart_write_string("\r\n");
+
+                uart_write_string("Filtered Z: ");
+                uart_write_int32(gyro_processing.filtered_z);
+                uart_write_string("\r\n");
             }
 
         }
