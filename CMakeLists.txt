@@ -33,6 +33,11 @@ target_sources(${PROJECT_NAME} PRIVATE
   # User defined sources
   Src/systick.c
   Src/gpio.c
+  Src/uart.c
+  Src/adc.c
+  Src/spi.c
+  Src/gyro.c
+  Src/gyro_processing.c
 )
 
 # Add include directories
