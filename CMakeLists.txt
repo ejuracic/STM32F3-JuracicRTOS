@@ -38,6 +38,7 @@ target_sources(${PROJECT_NAME} PRIVATE
   Src/spi.c
   Src/gyro.c
   Src/gyro_processing.c
+  Src/scheduler.c
 )
 
 # Add include directories
