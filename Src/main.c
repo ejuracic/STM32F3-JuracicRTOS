@@ -28,6 +28,11 @@
 #include "gyro_processing.h"
 #include "scheduler.h"
 #include "task_context.h"
+#include "context_demo.h"
+
+// Set to 1 for the PendSV two-thread demonstration
+// Set to 0 for the normal JuracicRTOS application
+#define JURACIC_CONTEXT_DEMO 1U
 
 // Timing configuration
 #define LED_BLINK_INTERVAL_MS 500U
@@ -424,6 +429,12 @@ static void task_monitor(void *context)
 
 int main(void)
 {
+    #if JURACIC_CONTEXT_DEMO
+        // Run the separate PendSV demonstration instead
+        // of the normal cooperative scheduler
+        context_demo_start();
+    #endif
+
     // Initialize existing hardware drivers
     gpio_led_init();
     gpio_button_init();
