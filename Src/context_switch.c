@@ -297,7 +297,16 @@ uint8_t context_switch_get_thread_info(
     output->wake_ms = thread->wake_ms;
     output->dispatch_count = thread->dispatch_count;
 
+    // Read the thread's stack guard and watermark
+    if (task_context_get_stack_stats(
+            thread->context,
+            &output->stack) == 0U)
+    {
+        return 0U;
+    }
+
     return 1U;
+
 }
 
 // Name: context_switch_get_thread_state

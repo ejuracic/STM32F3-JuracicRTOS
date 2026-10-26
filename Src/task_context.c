@@ -144,3 +144,65 @@ uint8_t task_context_check_initial_frame(
 
     return 1U;
 }
+
+
+// Name: task_context_get_stack_stats
+// Description: Estimates the maximum stack depth reached
+//              and checks the bottom-of-stack guard.
+// Parameters: task - Context containing stack metadata.
+//             output - Destination for measurements.
+// Returns: 1 if the stack metadata could be inspected,
+//          otherwise 0.
+uint8_t task_context_get_stack_stats(
+    const TaskContext *task,
+    TaskStackStats *output
+)
+{
+    if ((task == 0) ||
+        (output == 0) ||
+        (task->stack_base == 0) ||
+        (task->stack_words < 17U))
+    {
+        return 0U;
+    }
+
+    // Prevent arithmetic overflow in the byte calculation
+    if (task->stack_words > (UINT32_MAX / sizeof(uint32_t)))
+    {
+        return 0U;
+    }
+
+    // Use volatile reads because threads modify stack memory
+    const volatile uint32_t *stack = task->stack_base;
+
+    // Check the dedicated guard at the lowest stack word
+    output->guard_intact =
+        (stack[0] == TASK_CONTEXT_STACK_GUARD) ? 1U : 0U;
+
+    // The guard word is not usable stack memory
+    uint32_t usable_words = task->stack_words - 1U;
+    uint32_t untouched_words = 0U;
+
+    // Count untouched words from the low-address end
+    for (uint32_t i = 1U;
+         i < task->stack_words;
+         i++)
+    {
+        if (stack[i] != TASK_CONTEXT_STACK_FILL)
+        {
+            break;
+        }
+
+        untouched_words++;
+    }
+
+    // Calculate the historical high-water estimate
+    uint32_t used_words = usable_words - untouched_words;
+
+    output->usable_bytes = usable_words * sizeof(uint32_t);
+    output->peak_used_bytes = used_words * sizeof(uint32_t);
+    output->minimum_free_bytes =
+        untouched_words * sizeof(uint32_t);
+
+    return 1U;
+}

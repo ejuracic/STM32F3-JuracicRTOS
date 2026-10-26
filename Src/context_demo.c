@@ -135,46 +135,62 @@ static const char *demo_thread_state_name(
     }
 }
 
+
 // Name: demo_report_threads
-// Description: Prints compact information about all
-//              registered application and Idle threads.
+// Description: Reports stack usage, guard status, and
+//              execution state for each registered thread.
 // Parameters: None
 // Returns: None
 static void demo_report_threads(void)
 {
     uint32_t count = context_switch_get_thread_count();
 
-    uart_write_string("Threads: ");
-    uart_write_uint32(count);
+    uart_write_string(
+        "\r\n--- Thread Stack Diagnostics ---\r\n"
+    );
 
-    uart_write_string(" | Switches: ");
-    uart_write_uint32(context_switch_get_count());
-    uart_write_string("\r\n");
-
-    // Print each registered thread's current state
     for (uint32_t i = 0U; i < count; i++)
     {
         ContextThreadInfo info;
 
         if (context_switch_get_thread_info(i, &info) == 0U)
         {
+            uart_write_string("ERROR: Could not inspect thread ");
+            uart_write_uint32(i);
+            uart_write_string("\r\n");
             continue;
         }
 
         uart_write_string(info.name);
-        uart_write_string(":");
+        uart_write_string(": peak=");
+
+        uart_write_uint32(info.stack.peak_used_bytes);
+        uart_write_string("/");
+        uart_write_uint32(info.stack.usable_bytes);
+
+        uart_write_string(" B | min_free=");
+        uart_write_uint32(info.stack.minimum_free_bytes);
+
+        uart_write_string(" B | guard=");
+
+        if (info.stack.guard_intact != 0U)
+        {
+            uart_write_string("OK");
+        }
+        else
+        {
+            uart_write_string("FAIL");
+        }
+
+        uart_write_string(" | state=");
         uart_write_string(
             demo_thread_state_name(info.state)
         );
 
-        if ((i + 1U) < count)
-        {
-            uart_write_string(" | ");
-        }
+        uart_write_string("\r\n");
     }
-
-    uart_write_string("\r\n");
 }
+
 
 // Name: demo_monitor_thread
 // Description: Periodically reports hardware activity
@@ -204,8 +220,24 @@ static void demo_monitor_thread(void *argument)
         uart_write_uint32(g_button_presses);
         uart_write_string("\r\n");
 
-        // Print registered thread information
-        demo_report_threads();
+
+        // Print lightweight scheduling information
+        uart_write_string("Threads: ");
+        uart_write_uint32(context_switch_get_thread_count());
+
+        uart_write_string(" | Switches: ");
+        uart_write_uint32(context_switch_get_count());
+        uart_write_string("\r\n");
+
+        // Collect detailed stack statistics every 10 seconds
+        static uint32_t last_stack_report_ms = 0U;
+
+        if ((uint32_t)(now - last_stack_report_ms) >= 10000U)
+        {
+            last_stack_report_ms = now;
+            demo_report_threads();
+        }
+
     }
 }
 
@@ -289,6 +321,50 @@ void context_demo_start(void)
             __asm volatile ("wfi");
         }
     }
+
+
+    // Test guard detection before any threads begin running
+    TaskStackStats guard_test;
+
+    if ((task_context_get_stack_stats(
+            &g_led_context, &guard_test) == 0U) ||
+        (guard_test.guard_intact == 0U))
+    {
+        uart_write_string(
+            "ERROR: Initial LED stack guard invalid\r\n"
+        );
+
+        for (;;)
+        {
+            __asm volatile ("wfi");
+        }
+    }
+
+    // Temporarily corrupt the guard on an inactive stack
+    uint32_t original_guard = g_led_stack[0];
+    g_led_stack[0] = 0U;
+
+    uint8_t corruption_detected =
+        (task_context_get_stack_stats(
+            &g_led_context, &guard_test) != 0U) &&
+        (guard_test.guard_intact == 0U);
+
+    // Restore the guard before registering the thread
+    g_led_stack[0] = original_guard;
+
+    if (corruption_detected == 0U)
+    {
+        uart_write_string(
+            "ERROR: Stack guard self-test failed\r\n"
+        );
+
+        for (;;)
+        {
+            __asm volatile ("wfi");
+        }
+    }
+
+    uart_write_string("Stack guard self-test: PASS\r\n");
 
     // Initialize the generalized thread scheduler
     if (context_switch_init(&g_idle_context) == 0U)

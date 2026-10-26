@@ -16,6 +16,7 @@ typedef enum
     CONTEXT_THREAD_INVALID
 } ContextThreadState;
 
+
 // Public thread diagnostic information
 typedef struct
 {
@@ -23,7 +24,9 @@ typedef struct
     ContextThreadState state;
     uint32_t wake_ms;
     uint32_t dispatch_count;
+    TaskStackStats stack;
 } ContextThreadInfo;
+
 
 // Name: context_switch_init
 // Description: Initializes the thread scheduler and
