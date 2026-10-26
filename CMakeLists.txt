@@ -39,6 +39,7 @@ target_sources(${PROJECT_NAME} PRIVATE
   Src/gyro.c
   Src/gyro_processing.c
   Src/scheduler.c
+  Src/task_context.c
 )
 
 # Add include directories

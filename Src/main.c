@@ -27,6 +27,7 @@
 #include "gyro.h"
 #include "gyro_processing.h"
 #include "scheduler.h"
+#include "task_context.h"
 
 // Timing configuration
 #define LED_BLINK_INTERVAL_MS 500U
@@ -34,6 +35,9 @@
 
 // DWT cycle conversion for the current 8 MHz CPU clock
 #define CPU_CYCLES_PER_US 8U
+
+// One demonstration stack containing 256 32-bit words
+#define TASK_STACK_WORDS 256U
 
 // LED operating modes
 typedef enum
@@ -76,6 +80,31 @@ typedef struct
     ButtonDebouncer button;
     GyroProcessor gyro_processing;
 } AppContext;
+
+
+// Reserved stack for our first future thread
+static uint32_t g_demo_stack[TASK_STACK_WORDS]
+    __attribute__((aligned(8)));
+
+// Saved execution context for the demonstration thread
+static TaskContext g_demo_context;
+
+
+// Name: demo_thread
+// Description: Placeholder thread used to demonstrate
+//              independent task stack initialization.
+// Parameters: argument - Optional thread-specific context.
+// Returns: Does not return.
+static void demo_thread(void *argument)
+{
+    (void)argument;
+
+    // This function is not executed during Lesson 15
+    for (;;)
+    {
+        __asm volatile ("wfi");
+    }
+}
 
 // Name: led_set
 // Description: Updates the LED output and system state.
@@ -434,6 +463,38 @@ int main(void)
     // Initialize the cooperative scheduler
     scheduler_init();
 
+
+    // Prepare an independent task stack for future context switching
+    if (task_context_init(
+            &g_demo_context,
+            g_demo_stack,
+            TASK_STACK_WORDS,
+            demo_thread,
+            0
+        ) == 0U)
+    {
+        uart_write_string("Task stack initialization FAILED\r\n");
+
+        for (;;)
+        {
+            __asm volatile ("wfi");
+        }
+    }
+
+    // Validate the initial register frame and stack guard
+    if (task_context_check_initial_frame(&g_demo_context) == 0U)
+    {
+        uart_write_string("Task stack validation FAILED\r\n");
+
+        for (;;)
+        {
+            __asm volatile ("wfi");
+        }
+    }
+
+    uart_write_string(
+        "Task stack prepared: 1024 bytes (not scheduled)\r\n"
+    );
 
     // Register named periodic application tasks
     if ((scheduler_add_task("Button", task_button, &app, 1U) == 0U) ||
