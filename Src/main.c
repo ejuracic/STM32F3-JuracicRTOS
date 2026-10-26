@@ -32,6 +32,9 @@
 #define LED_BLINK_INTERVAL_MS 500U
 #define BUTTON_DEBOUNCE_MS 30U
 
+// DWT cycle conversion for the current 8 MHz CPU clock
+#define CPU_CYCLES_PER_US 8U
+
 // LED operating modes
 typedef enum
 {
@@ -227,16 +230,70 @@ static void task_gyro(void *context)
     }
 }
 
+
+
+// Name: report_scheduler_diagnostics
+// Description: Prints compact scheduler execution statistics.
+// Parameters: None
+// Returns: None
+static void report_scheduler_diagnostics(void)
+{
+    uart_write_string("\r\n--- Scheduler Diagnostics ---\r\n");
+
+    uint32_t count = scheduler_get_task_count();
+
+    for (uint32_t i = 0U; i < count; i++)
+    {
+        SchedulerTaskStats stats;
+
+        if (scheduler_get_task_stats(i, &stats) == 0U)
+        {
+            continue;
+        }
+
+        uart_write_string(stats.name);
+
+        uart_write_string(": runs=");
+        uart_write_uint32(stats.execution_count);
+
+        uart_write_string(" skips=");
+        uart_write_uint32(stats.skipped_periods);
+
+        uart_write_string(" late=");
+        uart_write_uint32(stats.max_lateness_ms);
+        uart_write_string("ms");
+
+        uart_write_string(" max=");
+        if (scheduler_profiling_available() != 0U)
+        {
+            uart_write_uint32(
+                stats.max_execution_cycles / CPU_CYCLES_PER_US
+            );
+            uart_write_string("us");
+        }
+        else
+        {
+            uart_write_string("N/A");
+        }
+
+        uart_write_string("\r\n");
+    }
+}
+
+
+
 // Name: task_monitor
-// Description: Samples ADC sensors and transmits system
-//              information using USART1.
-// Parameters: context - Pointer to the application context.
+// Description: Updates sensor measurements and prints
+//              compact system and scheduler information.
+// Parameters: context - Pointer to application context.
 // Returns: None
 static void task_monitor(void *context)
 {
     AppContext *app = (AppContext *)context;
     SystemState *state = &app->state;
     GyroProcessor *gyro = &app->gyro_processing;
+
+    static uint32_t last_diagnostics_ms = 0U;
 
     state->uptime_ms = systick_get_milliseconds();
 
@@ -252,150 +309,89 @@ static void task_monitor(void *context)
         state->vrefint_adc_raw
     );
 
-    // Report system information
-    uart_write_string("\r\n=== JuracicRTOS ===\r\n");
+    // Print system uptime
+    uart_write_string("\r\n=== JuracicRTOS | ");
+    uart_write_uint32(state->uptime_ms / 1000U);
+    uart_write_string("s ===\r\n");
 
-    uart_write_string("Uptime: ");
-    uart_write_uint32(state->uptime_ms);
-    uart_write_string(" ms\r\n");
-
-    uart_write_string("LED Mode: ");
+    // Print LED mode
+    uart_write_string("LED: ");
 
     switch (state->mode)
     {
         case LED_MODE_BLINK:
-            uart_write_string("BLINK\r\n");
+            uart_write_string("BLINK");
             break;
 
         case LED_MODE_ON:
-            uart_write_string("ON\r\n");
+            uart_write_string("ON");
             break;
 
         case LED_MODE_OFF:
-            uart_write_string("OFF\r\n");
+            uart_write_string("OFF");
             break;
 
         default:
-            uart_write_string("UNKNOWN\r\n");
+            uart_write_string("UNKNOWN");
             break;
     }
 
-    uart_write_string("LED State: ");
-    uart_write_string(state->led_on ? "ON\r\n" : "OFF\r\n");
-
-    uart_write_string("Button Presses: ");
+    // Print button information
+    uart_write_string(" | Button Presses: ");
     uart_write_uint32(state->button_press_count);
     uart_write_string("\r\n");
 
-    uart_write_string("Button State: ");
-    uart_write_string(
-        state->button_pressed ? "PRESSED\r\n" : "RELEASED\r\n"
-    );
+    // Print temperature and voltage
+    uart_write_string("Temperature: ");
 
-    uart_write_string("Temperature ADC: ");
-    uart_write_uint32(state->temperature_adc_raw);
-    uart_write_string("\r\n");
-
-    uart_write_string("VREFINT ADC: ");
-    uart_write_uint32(state->vrefint_adc_raw);
-    uart_write_string("\r\n");
-
-    uart_write_string("Analog Supply: ");
-
-    if (state->vdda_mv != 0U)
+    if (state->vrefint_adc_raw != 0U)
     {
+        uart_write_int32(state->temperature_c);
+        uart_write_string(" C | VDDA: ");
         uart_write_uint32(state->vdda_mv);
         uart_write_string(" mV\r\n");
     }
     else
     {
-        uart_write_string("INVALID\r\n");
+        uart_write_string("UNAVAILABLE\r\n");
     }
 
-    uart_write_string("MCU Temperature: ");
+    // Print filtered gyroscope measurements
+    uart_write_string("Gyro: ");
 
-    if (state->vrefint_adc_raw != 0U)
+    if (state->gyro_ready == 0U)
     {
-        uart_write_int32(state->temperature_c);
-        uart_write_string(" C\r\n");
+        uart_write_string("NOT READY\r\n");
     }
-    else
+    else if (gyro->calibrated == 0U)
     {
-        uart_write_string("INVALID\r\n");
-    }
-
-    uart_write_string("Gyroscope ID: ");
-    uart_write_uint32(state->gyro_id);
-    uart_write_string("\r\n");
-
-    if (state->gyro_ready != 0U)
-    {
-        uart_write_string("Raw Gyro X: ");
-        uart_write_int32(state->gyro_axes.x);
-        uart_write_string("\r\n");
-
-        uart_write_string("Raw Gyro Y: ");
-        uart_write_int32(state->gyro_axes.y);
-        uart_write_string("\r\n");
-
-        uart_write_string("Raw Gyro Z: ");
-        uart_write_int32(state->gyro_axes.z);
-        uart_write_string("\r\n");
-
-        uart_write_string("Gyro Calibration: ");
-
-        if (gyro->calibrated == 0U)
-        {
-            uart_write_string("IN PROGRESS (");
-            uart_write_uint32(gyro->samples_collected);
-            uart_write_string("/64)\r\n");
-        }
-        else
-        {
-            uart_write_string("COMPLETE\r\n");
-
-            uart_write_string("Gyro Offset X: ");
-            uart_write_int32(gyro->offset_x);
-            uart_write_string("\r\n");
-
-            uart_write_string("Gyro Offset Y: ");
-            uart_write_int32(gyro->offset_y);
-            uart_write_string("\r\n");
-
-            uart_write_string("Gyro Offset Z: ");
-            uart_write_int32(gyro->offset_z);
-            uart_write_string("\r\n");
-
-            uart_write_string("Calibrated X: ");
-            uart_write_int32(gyro->calibrated_x);
-            uart_write_string("\r\n");
-
-            uart_write_string("Calibrated Y: ");
-            uart_write_int32(gyro->calibrated_y);
-            uart_write_string("\r\n");
-
-            uart_write_string("Calibrated Z: ");
-            uart_write_int32(gyro->calibrated_z);
-            uart_write_string("\r\n");
-
-            uart_write_string("Filtered X: ");
-            uart_write_int32(gyro->filtered_x);
-            uart_write_string("\r\n");
-
-            uart_write_string("Filtered Y: ");
-            uart_write_int32(gyro->filtered_y);
-            uart_write_string("\r\n");
-
-            uart_write_string("Filtered Z: ");
-            uart_write_int32(gyro->filtered_z);
-            uart_write_string("\r\n");
-        }
+        uart_write_string("CALIBRATING (");
+        uart_write_uint32(gyro->samples_collected);
+        uart_write_string("/64)\r\n");
     }
     else
     {
-        uart_write_string("Gyroscope: NOT READY\r\n");
+        uart_write_string("Filtered X=");
+        uart_write_int32(gyro->filtered_x);
+
+        uart_write_string(" Y=");
+        uart_write_int32(gyro->filtered_y);
+
+        uart_write_string(" Z=");
+        uart_write_int32(gyro->filtered_z);
+
+        uart_write_string("\r\n");
+    }
+
+    // Print scheduler diagnostics every 10 seconds
+    if ((uint32_t)(state->uptime_ms - last_diagnostics_ms)
+        >= 10000U)
+    {
+        last_diagnostics_ms = state->uptime_ms;
+        report_scheduler_diagnostics();
     }
 }
+
 
 int main(void)
 {
@@ -438,11 +434,12 @@ int main(void)
     // Initialize the cooperative scheduler
     scheduler_init();
 
-    // Register periodic application tasks
-    if ((scheduler_add_task(task_button, &app, 1U) == 0U) ||
-        (scheduler_add_task(task_led, &app, 10U) == 0U) ||
-        (scheduler_add_task(task_gyro, &app, 100U) == 0U) ||
-        (scheduler_add_task(task_monitor, &app, 1000U) == 0U))
+
+    // Register named periodic application tasks
+    if ((scheduler_add_task("Button", task_button, &app, 1U) == 0U) ||
+        (scheduler_add_task("LED", task_led, &app, 10U) == 0U) ||
+        (scheduler_add_task("Gyroscope", task_gyro, &app, 100U) == 0U) ||
+        (scheduler_add_task("Monitor", task_monitor, &app, 2000U) == 0U))
     {
         uart_write_string("Scheduler registration failed\r\n");
 
@@ -451,6 +448,7 @@ int main(void)
             __asm volatile ("wfi");
         }
     }
+
 
     uart_write_string("JuracicRTOS scheduler started\r\n");
 
