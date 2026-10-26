@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include "task_context.h"
 
+// Maximum number of application threads
+#define CONTEXT_MAX_USER_THREADS 4U
+
 // Thread execution states
 typedef enum
 {
@@ -13,20 +16,35 @@ typedef enum
     CONTEXT_THREAD_INVALID
 } ContextThreadState;
 
-// Name: context_switch_configure
-// Description: Registers two user threads and an idle thread.
-// Parameters: first - Initial user thread context.
-//             second - Second user thread context.
-//             idle - Idle thread context.
-// Returns: None
-void context_switch_configure(
-    TaskContext *first,
-    TaskContext *second,
-    TaskContext *idle
+// Public thread diagnostic information
+typedef struct
+{
+    const char *name;
+    ContextThreadState state;
+    uint32_t wake_ms;
+    uint32_t dispatch_count;
+} ContextThreadInfo;
+
+// Name: context_switch_init
+// Description: Initializes the thread scheduler and
+//              registers the dedicated Idle Thread.
+// Parameters: idle - Prepared Idle Thread context.
+// Returns: 1 on success, 0 on failure.
+uint8_t context_switch_init(TaskContext *idle);
+
+// Name: context_switch_add_thread
+// Description: Registers an application thread before
+//              the scheduler starts.
+// Parameters: name - Persistent thread name.
+//             context - Prepared task context.
+// Returns: 1 on success, 0 on failure.
+uint8_t context_switch_add_thread(
+    const char *name,
+    TaskContext *context
 );
 
 // Name: context_switch_start
-// Description: Starts the first thread through SVC.
+// Description: Starts the first registered thread via SVC.
 // Parameters: None
 // Returns: Does not return during normal operation.
 void context_switch_start(void);
@@ -38,33 +56,51 @@ void context_switch_start(void);
 void context_switch_yield(void);
 
 // Name: context_switch_sleep
-// Description: Suspends the calling thread for a duration.
-// Parameters: milliseconds - Requested sleep duration.
+// Description: Suspends the calling application thread
+//              for a specified number of milliseconds.
+// Parameters: milliseconds - Sleep duration.
 // Returns: None
 void context_switch_sleep(uint32_t milliseconds);
 
 // Name: context_switch_enable_preemption
-// Description: Enables timer-driven scheduling requests.
+// Description: Enables SysTick-driven scheduling requests.
 // Parameters: None
 // Returns: None
 void context_switch_enable_preemption(void);
 
 // Name: context_switch_on_systick
-// Description: Requests scheduling on each active SysTick.
+// Description: Requests PendSV when preemption is active.
 // Parameters: None
 // Returns: None
 void context_switch_on_systick(void);
 
 // Name: context_switch_get_count
-// Description: Gets the completed thread-switch count.
+// Description: Returns the number of actual thread changes.
 // Parameters: None
-// Returns: Number of actual thread changes.
+// Returns: Completed context-switch count.
 uint32_t context_switch_get_count(void);
 
+// Name: context_switch_get_thread_count
+// Description: Counts registered threads including Idle.
+// Parameters: None
+// Returns: Registered thread count.
+uint32_t context_switch_get_thread_count(void);
+
+// Name: context_switch_get_thread_info
+// Description: Copies one thread's diagnostic information.
+// Parameters: index - Registered application thread index,
+//             or final index for the Idle Thread.
+//             output - Destination for the information.
+// Returns: 1 on success, 0 on failure.
+uint8_t context_switch_get_thread_info(
+    uint32_t index,
+    ContextThreadInfo *output
+);
+
 // Name: context_switch_get_thread_state
-// Description: Gets the execution state of a thread.
-// Parameters: index - Thread index, 0, 1, or 2.
-// Returns: Thread state or INVALID for an invalid index.
+// Description: Reads a thread's execution state.
+// Parameters: index - Thread index including Idle.
+// Returns: Thread state or INVALID.
 ContextThreadState context_switch_get_thread_state(
     uint32_t index
 );

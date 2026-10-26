@@ -9,11 +9,11 @@
 
 #define PENDSV_SET (1UL << 28)
 
-#define USER_THREAD_COUNT 2U
-#define TOTAL_THREAD_COUNT 3U
-#define IDLE_THREAD_INDEX 2U
+// Reserve one additional slot for Idle
+#define IDLE_THREAD_SLOT CONTEXT_MAX_USER_THREADS
+#define CONTEXT_TOTAL_SLOTS (CONTEXT_MAX_USER_THREADS + 1U)
 
-// Validate assumptions used by our ARM assembly
+// Verify the structure layout used by assembly
 _Static_assert(
     sizeof(void *) == 4U,
     "Context switching requires 32-bit pointers"
@@ -21,82 +21,148 @@ _Static_assert(
 
 _Static_assert(
     offsetof(TaskContext, saved_sp) == 8U,
-    "TaskContext.saved_sp must remain at offset 8"
+    "TaskContext.saved_sp must be at offset 8"
 );
 
-// Kernel thread control block
+// Kernel Task Control Block
 typedef struct
 {
     TaskContext *context;
+    const char *name;
     volatile ContextThreadState state;
     uint32_t wake_ms;
+    uint32_t dispatch_count;
 } KernelThread;
 
-// Thread table and current thread index
-static KernelThread g_threads[TOTAL_THREAD_COUNT];
-static volatile uint32_t g_current_thread = 0U;
+// Statically allocated thread control blocks
+static KernelThread g_threads[CONTEXT_TOTAL_SLOTS];
 
-// Current task context used by SVC and PendSV
+// Thread registration and scheduling state
+static volatile uint32_t g_user_thread_count = 0U;
+static volatile uint32_t g_current_slot = IDLE_THREAD_SLOT;
+static uint32_t g_initialized = 0U;
+
+// Current context accessed by SVC and PendSV assembly
 TaskContext * volatile g_switch_current_task = 0;
 
-// Scheduling control and diagnostics
+// Kernel control and diagnostics
 volatile uint32_t g_switch_count = 0U;
 volatile uint32_t g_switch_started = 0U;
 
 static volatile uint32_t g_preemption_enabled = 0U;
 
-// Name: context_switch_configure
-// Description: Initializes two user threads and one idle
-//              thread, including their starting states.
-// Parameters: first - Initial thread context.
-//             second - Second user thread context.
-//             idle - Idle thread context.
-// Returns: None
-void context_switch_configure(
-    TaskContext *first,
-    TaskContext *second,
-    TaskContext *idle
-)
+// Name: context_switch_init
+// Description: Resets the thread table and registers the
+//              dedicated Idle Thread.
+// Parameters: idle - Initialized Idle Thread context.
+// Returns: 1 on success, 0 on failure.
+uint8_t context_switch_init(TaskContext *idle)
 {
-    // Thread A begins as the initial running thread
-    g_threads[0].context = first;
-    g_threads[0].state = CONTEXT_THREAD_RUNNING;
-    g_threads[0].wake_ms = 0U;
+    if ((g_switch_started != 0U) ||
+        (idle == 0) ||
+        (task_context_check_initial_frame(idle) == 0U))
+    {
+        return 0U;
+    }
 
-    // Thread B begins ready to execute
-    g_threads[1].context = second;
-    g_threads[1].state = CONTEXT_THREAD_READY;
-    g_threads[1].wake_ms = 0U;
+    // Reset all TCB slots
+    for (uint32_t i = 0U;
+         i < CONTEXT_TOTAL_SLOTS;
+         i++)
+    {
+        g_threads[i] = (KernelThread){0};
+    }
 
-    // Idle thread is available when no user thread is ready
-    g_threads[2].context = idle;
-    g_threads[2].state = CONTEXT_THREAD_READY;
-    g_threads[2].wake_ms = 0U;
+    // Register the special Idle Thread
+    g_threads[IDLE_THREAD_SLOT].context = idle;
+    g_threads[IDLE_THREAD_SLOT].name = "Idle";
+    g_threads[IDLE_THREAD_SLOT].state =
+        CONTEXT_THREAD_READY;
 
-    g_current_thread = 0U;
-    g_switch_current_task = first;
+    g_user_thread_count = 0U;
+    g_current_slot = IDLE_THREAD_SLOT;
 
+    g_switch_current_task = 0;
     g_switch_count = 0U;
     g_switch_started = 0U;
     g_preemption_enabled = 0U;
 
-    // Configure PendSV with the lowest priority
+    // PendSV receives the lowest exception priority
     SCB_SHPR3 =
         (SCB_SHPR3 & ~(0xFFUL << 16)) |
         (0xFFUL << 16);
+
+    g_initialized = 1U;
+
+    return 1U;
+}
+
+// Name: context_switch_add_thread
+// Description: Adds a named application thread to the
+//              kernel's statically allocated TCB table.
+// Parameters: name - Persistent thread name.
+//             context - Prepared task context.
+// Returns: 1 on success, 0 on failure.
+uint8_t context_switch_add_thread(
+    const char *name,
+    TaskContext *context
+)
+{
+    if ((g_initialized == 0U) ||
+        (g_switch_started != 0U) ||
+        (name == 0) ||
+        (context == 0) ||
+        (g_user_thread_count >= CONTEXT_MAX_USER_THREADS))
+    {
+        return 0U;
+    }
+
+    // Reject invalid initial stack frames
+    if (task_context_check_initial_frame(context) == 0U)
+    {
+        return 0U;
+    }
+
+    // Prevent registering the same context twice
+    for (uint32_t i = 0U;
+         i < g_user_thread_count;
+         i++)
+    {
+        if (g_threads[i].context == context)
+        {
+            return 0U;
+        }
+    }
+
+    uint32_t index = g_user_thread_count;
+
+    g_threads[index].context = context;
+    g_threads[index].name = name;
+    g_threads[index].state = CONTEXT_THREAD_READY;
+    g_threads[index].wake_ms = 0U;
+    g_threads[index].dispatch_count = 0U;
+
+    g_user_thread_count++;
+
+    return 1U;
 }
 
 // Name: context_switch_enable_preemption
-// Description: Arms automatic scheduling through SysTick.
+// Description: Arms automatic SysTick scheduling.
 // Parameters: None
 // Returns: None
 void context_switch_enable_preemption(void)
 {
-    g_preemption_enabled = 1U;
+    if ((g_initialized != 0U) &&
+        (g_user_thread_count != 0U))
+    {
+        g_preemption_enabled = 1U;
+    }
 }
 
 // Name: context_switch_on_systick
-// Description: Requests PendSV while the thread kernel is active.
+// Description: Requests PendSV after a system tick when
+//              the preemptive kernel is running.
 // Parameters: None
 // Returns: None
 void context_switch_on_systick(void)
@@ -109,7 +175,7 @@ void context_switch_on_systick(void)
 }
 
 // Name: context_switch_yield
-// Description: Requests a voluntary context-switch decision.
+// Description: Requests a voluntary scheduling decision.
 // Parameters: None
 // Returns: None
 void context_switch_yield(void)
@@ -127,9 +193,9 @@ void context_switch_yield(void)
 }
 
 // Name: context_switch_sleep
-// Description: Places the currently running user thread
-//              into SLEEPING state until its deadline.
-// Parameters: milliseconds - Sleep duration in milliseconds.
+// Description: Marks the running application thread
+//              sleeping until a future SysTick deadline.
+// Parameters: milliseconds - Requested sleep duration.
 // Returns: None
 void context_switch_sleep(uint32_t milliseconds)
 {
@@ -142,7 +208,7 @@ void context_switch_sleep(uint32_t milliseconds)
 
     uint32_t previous_mask;
 
-    // Disable interrupts while changing shared thread state
+    // Protect the update from interrupt-driven scheduling
     __asm volatile (
         "mrs %0, primask\n"
         "cpsid i\n"
@@ -151,23 +217,23 @@ void context_switch_sleep(uint32_t milliseconds)
         : "memory"
     );
 
-    if (g_current_thread < USER_THREAD_COUNT)
+    if ((g_current_slot < g_user_thread_count) &&
+        (g_threads[g_current_slot].state ==
+         CONTEXT_THREAD_RUNNING))
     {
         KernelThread *thread =
-            &g_threads[g_current_thread];
+            &g_threads[g_current_slot];
 
-        // Calculate the future wake-up deadline
         thread->wake_ms =
             systick_get_milliseconds() + milliseconds;
 
-        // Block this thread until its deadline
         thread->state = CONTEXT_THREAD_SLEEPING;
 
-        // Request a scheduling decision
+        // The sleeping thread must stop executing
         SCB_ICSR = PENDSV_SET;
     }
 
-    // Restore the original interrupt state
+    // Restore the previous interrupt mask
     __asm volatile (
         "msr primask, %0\n"
         "dsb\n"
@@ -179,68 +245,121 @@ void context_switch_sleep(uint32_t milliseconds)
 }
 
 // Name: context_switch_get_count
-// Description: Returns the number of completed thread changes.
+// Description: Returns actual changes between threads.
 // Parameters: None
-// Returns: Completed context-switch count.
+// Returns: Completed thread-switch count.
 uint32_t context_switch_get_count(void)
 {
     return g_switch_count;
 }
 
+// Name: context_switch_get_thread_count
+// Description: Counts application threads plus Idle.
+// Parameters: None
+// Returns: Number of registered threads.
+uint32_t context_switch_get_thread_count(void)
+{
+    if (g_initialized == 0U)
+    {
+        return 0U;
+    }
+
+    return g_user_thread_count + 1U;
+}
+
+// Name: context_switch_get_thread_info
+// Description: Copies diagnostic information for a
+//              registered application or Idle Thread.
+// Parameters: index - Public thread index.
+//             output - Destination for copied information.
+// Returns: 1 on success, 0 on failure.
+uint8_t context_switch_get_thread_info(
+    uint32_t index,
+    ContextThreadInfo *output
+)
+{
+    if ((output == 0) ||
+        (g_initialized == 0U) ||
+        (index > g_user_thread_count))
+    {
+        return 0U;
+    }
+
+    // Idle appears immediately after registered threads
+    uint32_t slot =
+        (index == g_user_thread_count)
+        ? IDLE_THREAD_SLOT : index;
+
+    KernelThread *thread = &g_threads[slot];
+
+    output->name = thread->name;
+    output->state = thread->state;
+    output->wake_ms = thread->wake_ms;
+    output->dispatch_count = thread->dispatch_count;
+
+    return 1U;
+}
+
 // Name: context_switch_get_thread_state
-// Description: Retrieves the state of a registered thread.
-// Parameters: index - Thread index.
-// Returns: Current state or INVALID.
+// Description: Reads a registered thread's current state.
+// Parameters: index - Public thread index.
+// Returns: Thread state or INVALID.
 ContextThreadState context_switch_get_thread_state(
     uint32_t index
 )
 {
-    if (index >= TOTAL_THREAD_COUNT)
+    ContextThreadInfo info;
+
+    if (context_switch_get_thread_info(index, &info) == 0U)
     {
         return CONTEXT_THREAD_INVALID;
     }
 
-    return g_threads[index].state;
+    return info.state;
 }
 
 // Name: context_switch_select_next
-// Description: Wakes eligible threads and selects the next
-//              runnable thread in round-robin order.
+// Description: Wakes expired sleeping threads and selects
+//              a runnable thread using round-robin policy.
 // Parameters: None
-// Returns: Pointer to the selected task context.
-// This function is called from PendSV with interrupts masked.
+// Returns: Pointer to the selected TaskContext.
+// Called by PendSV while interrupts are masked.
 __attribute__((used, noinline))
 TaskContext *context_switch_select_next(void)
 {
     uint32_t now = systick_get_milliseconds();
 
-    // Wake threads whose sleeping deadlines have expired
-    for (uint32_t i = 0U; i < USER_THREAD_COUNT; i++)
+    // Make sleeping application threads ready when due
+    for (uint32_t i = 0U;
+         i < g_user_thread_count;
+         i++)
     {
-        if ((g_threads[i].state ==
-             CONTEXT_THREAD_SLEEPING) &&
-            ((int32_t)(now - g_threads[i].wake_ms) >= 0))
+        KernelThread *thread = &g_threads[i];
+
+        if ((thread->state == CONTEXT_THREAD_SLEEPING) &&
+            ((int32_t)(now - thread->wake_ms) >= 0))
         {
-            g_threads[i].state = CONTEXT_THREAD_READY;
+            thread->state = CONTEXT_THREAD_READY;
         }
     }
 
-    // Determine where round-robin selection should begin
-    uint32_t first =
-        (g_current_thread < USER_THREAD_COUNT)
-        ? ((g_current_thread + 1U) % USER_THREAD_COUNT)
-        : 0U;
+    uint32_t next = IDLE_THREAD_SLOT;
+    uint32_t first = 0U;
 
-    // Default to the idle thread if nobody else can run
-    uint32_t next = IDLE_THREAD_INDEX;
+    // Begin searching after the currently running thread
+    if (g_current_slot < g_user_thread_count)
+    {
+        first =
+            (g_current_slot + 1U) % g_user_thread_count;
+    }
 
-    // Search for a ready user thread
+    // Search all registered application threads
     for (uint32_t offset = 0U;
-         offset < USER_THREAD_COUNT;
+         offset < g_user_thread_count;
          offset++)
     {
         uint32_t index =
-            (first + offset) % USER_THREAD_COUNT;
+            (first + offset) % g_user_thread_count;
 
         ContextThreadState state = g_threads[index].state;
 
@@ -252,21 +371,23 @@ TaskContext *context_switch_select_next(void)
         }
     }
 
-    // Only record a switch when changing actual threads
-    if (next != g_current_thread)
+    // Only count a switch when the selected thread changes
+    if (next != g_current_slot)
     {
-        // Return the previous thread to READY if appropriate
-        if (g_threads[g_current_thread].state ==
-            CONTEXT_THREAD_RUNNING)
+        KernelThread *previous =
+            &g_threads[g_current_slot];
+
+        // Make the outgoing thread ready if still runnable
+        if (previous->state == CONTEXT_THREAD_RUNNING)
         {
-            g_threads[g_current_thread].state =
-                CONTEXT_THREAD_READY;
+            previous->state = CONTEXT_THREAD_READY;
         }
 
-        // Activate the selected thread
+        // Activate the incoming thread
         g_threads[next].state = CONTEXT_THREAD_RUNNING;
+        g_threads[next].dispatch_count++;
 
-        g_current_thread = next;
+        g_current_slot = next;
         g_switch_current_task = g_threads[next].context;
 
         g_switch_count++;
@@ -276,13 +397,32 @@ TaskContext *context_switch_select_next(void)
 }
 
 // Name: context_switch_start
-// Description: Starts the initial thread through SVC.
+// Description: Prepares the first registered thread
+//              and starts it through the SVC exception.
 // Parameters: None
 // Returns: Does not return during normal operation.
 void context_switch_start(void)
 {
+    if ((g_initialized == 0U) ||
+        (g_user_thread_count == 0U) ||
+        (g_switch_started != 0U))
+    {
+        for (;;)
+        {
+            __asm volatile ("wfi");
+        }
+    }
+
+    // Select the first registered application thread
+    g_current_slot = 0U;
+    g_threads[0].state = CONTEXT_THREAD_RUNNING;
+    g_threads[0].dispatch_count = 1U;
+
+    g_switch_current_task = g_threads[0].context;
+
     __asm volatile ("svc 0");
 
+    // The initial thread launch should never return
     for (;;)
     {
         __asm volatile ("wfi");
@@ -290,8 +430,8 @@ void context_switch_start(void)
 }
 
 // Name: SVC_Handler
-// Description: Restores the initial thread and starts
-//              execution in Thread mode using PSP.
+// Description: Restores the first prepared thread context
+//              and starts it in Thread mode using PSP.
 // Parameters: None
 // Returns: Through hardware exception return.
 __attribute__((naked))
@@ -302,13 +442,13 @@ void SVC_Handler(void)
         "ldr r0, [r0]\n"
         "ldr r0, [r0, #8]\n"
 
-        // Restore R4-R11
+        // Restore initial R4-R11
         "ldmia r0!, {r4-r11}\n"
 
-        // PSP points to the hardware exception frame
+        // Point PSP at the hardware exception frame
         "msr psp, r0\n"
 
-        // The first PSP thread is now ready to execute
+        // Allow subsequent SysTick scheduling requests
         "ldr r1, =g_switch_started\n"
         "movs r2, #1\n"
         "str r2, [r1]\n"
@@ -320,21 +460,21 @@ void SVC_Handler(void)
 }
 
 // Name: PendSV_Handler
-// Description: Preserves the outgoing execution context,
-//              selects a runnable thread, and restores it.
+// Description: Saves the outgoing thread, calls the
+//              scheduler, and restores the selected thread.
 // Parameters: None
 // Returns: Through hardware exception return.
 __attribute__((naked))
 void PendSV_Handler(void)
 {
     __asm volatile (
-        // Keep the context operation atomic
+        // Prevent interrupting the kernel state update
         "cpsid i\n"
 
-        // Read the outgoing Process Stack Pointer
+        // Read the outgoing thread's process stack
         "mrs r0, psp\n"
 
-        // Save R4-R11 on the outgoing thread stack
+        // Save the software-managed register context
         "stmdb r0!, {r4-r11}\n"
 
         // Store the outgoing thread's saved stack pointer
@@ -342,28 +482,28 @@ void PendSV_Handler(void)
         "ldr r2, [r1]\n"
         "str r0, [r2, #8]\n"
 
-        // Preserve EXC_RETURN and maintain stack alignment
+        // Preserve exception return and 8-byte alignment
         "push {r3, lr}\n"
 
-        // Ask the C scheduler which thread should execute
+        // Run the scheduling algorithm in C
         "bl context_switch_select_next\n"
 
         // Restore the handler's saved registers
         "pop {r3, lr}\n"
 
-        // R0 now contains the selected TaskContext pointer
+        // R0 contains the chosen TaskContext pointer
         "ldr r0, [r0, #8]\n"
 
-        // Restore the incoming thread's R4-R11
+        // Restore the selected thread's R4-R11
         "ldmia r0!, {r4-r11}\n"
 
-        // Set PSP for the incoming hardware exception frame
+        // PSP now points to its hardware exception frame
         "msr psp, r0\n"
 
-        // Re-enable interrupts before exception return
+        // Re-enable interrupts for exception return
         "cpsie i\n"
 
-        // Resume the selected thread
+        // Resume the chosen thread
         "bx lr\n"
     );
 }

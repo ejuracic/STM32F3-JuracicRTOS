@@ -6,32 +6,41 @@
 #include "context_switch.h"
 #include "context_demo.h"
 
+// Demonstration configuration
 #define DEMO_STACK_WORDS 256U
+#define DEMO_LED_INTERVAL_MS 500U
+#define DEMO_BUTTON_INTERVAL_MS 10U
+#define DEMO_BUTTON_DEBOUNCE_MS 30U
+#define DEMO_REPORT_INTERVAL_MS 2000U
 
-// Independent 1024-byte stacks for three threads
-static uint32_t g_thread_a_stack[DEMO_STACK_WORDS]
+// Four independent 1024-byte task stacks
+static uint32_t g_led_stack[DEMO_STACK_WORDS]
     __attribute__((aligned(8)));
 
-static uint32_t g_thread_b_stack[DEMO_STACK_WORDS]
+static uint32_t g_button_stack[DEMO_STACK_WORDS]
+    __attribute__((aligned(8)));
+
+static uint32_t g_monitor_stack[DEMO_STACK_WORDS]
     __attribute__((aligned(8)));
 
 static uint32_t g_idle_stack[DEMO_STACK_WORDS]
     __attribute__((aligned(8)));
 
-// Independent saved execution contexts
-static TaskContext g_thread_a_context;
-static TaskContext g_thread_b_context;
+// Prepared execution contexts
+static TaskContext g_led_context;
+static TaskContext g_button_context;
+static TaskContext g_monitor_context;
 static TaskContext g_idle_context;
 
-// Shared demonstration counters
-static volatile uint32_t g_thread_a_toggles = 0U;
-static volatile uint32_t g_thread_b_reports = 0U;
+// Shared demonstration state
+static volatile uint32_t g_led_toggles = 0U;
+static volatile uint32_t g_button_presses = 0U;
 
-// Name: demo_thread_a
-// Description: Toggles the blue LED and sleeps for 500 ms.
-// Parameters: argument - Unused task argument.
+// Name: demo_led_thread
+// Description: Toggles the blue LED every 500 ms.
+// Parameters: argument - Unused thread argument.
 // Returns: Does not return.
-static void demo_thread_a(void *argument)
+static void demo_led_thread(void *argument)
 {
     (void)argument;
 
@@ -41,10 +50,8 @@ static void demo_thread_a(void *argument)
 
     for (;;)
     {
-        // Suspend this thread for 500 milliseconds
-        context_switch_sleep(500U);
+        context_switch_sleep(DEMO_LED_INTERVAL_MS);
 
-        // Toggle the LED after the thread wakes
         led_on = (led_on == 0U) ? 1U : 0U;
 
         if (led_on != 0U)
@@ -56,65 +63,156 @@ static void demo_thread_a(void *argument)
             gpio_led_off();
         }
 
-        g_thread_a_toggles++;
+        g_led_toggles++;
     }
 }
 
-// Name: demo_thread_b
-// Description: Reports thread activity every two seconds.
-// Parameters: argument - Unused task argument.
+// Name: demo_button_thread
+// Description: Polls and debounces the USER button using
+//              an independent thread stack.
+// Parameters: argument - Unused thread argument.
 // Returns: Does not return.
-static void demo_thread_b(void *argument)
+static void demo_button_thread(void *argument)
+{
+    (void)argument;
+
+    uint8_t raw_state = gpio_button_is_pressed();
+    uint8_t stable_state = raw_state;
+    uint32_t last_change_ms = systick_get_milliseconds();
+
+    for (;;)
+    {
+        uint32_t now = systick_get_milliseconds();
+        uint8_t raw = gpio_button_is_pressed();
+
+        // Record changes to the instantaneous button state
+        if (raw != raw_state)
+        {
+            raw_state = raw;
+            last_change_ms = now;
+        }
+
+        // Accept a new state after the debounce interval
+        if ((stable_state != raw_state) &&
+            ((uint32_t)(now - last_change_ms) >=
+             DEMO_BUTTON_DEBOUNCE_MS))
+        {
+            stable_state = raw_state;
+
+            // Count each debounced press only once
+            if (stable_state != 0U)
+            {
+                g_button_presses++;
+            }
+        }
+
+        // Suspend the button thread until its next poll
+        context_switch_sleep(DEMO_BUTTON_INTERVAL_MS);
+    }
+}
+
+// Name: demo_thread_state_name
+// Description: Converts a thread state to a readable name.
+// Parameters: state - Thread state.
+// Returns: String describing the state.
+static const char *demo_thread_state_name(
+    ContextThreadState state
+)
+{
+    switch (state)
+    {
+        case CONTEXT_THREAD_READY:
+            return "READY";
+
+        case CONTEXT_THREAD_RUNNING:
+            return "RUNNING";
+
+        case CONTEXT_THREAD_SLEEPING:
+            return "SLEEPING";
+
+        default:
+            return "INVALID";
+    }
+}
+
+// Name: demo_report_threads
+// Description: Prints compact information about all
+//              registered application and Idle threads.
+// Parameters: None
+// Returns: None
+static void demo_report_threads(void)
+{
+    uint32_t count = context_switch_get_thread_count();
+
+    uart_write_string("Threads: ");
+    uart_write_uint32(count);
+
+    uart_write_string(" | Switches: ");
+    uart_write_uint32(context_switch_get_count());
+    uart_write_string("\r\n");
+
+    // Print each registered thread's current state
+    for (uint32_t i = 0U; i < count; i++)
+    {
+        ContextThreadInfo info;
+
+        if (context_switch_get_thread_info(i, &info) == 0U)
+        {
+            continue;
+        }
+
+        uart_write_string(info.name);
+        uart_write_string(":");
+        uart_write_string(
+            demo_thread_state_name(info.state)
+        );
+
+        if ((i + 1U) < count)
+        {
+            uart_write_string(" | ");
+        }
+    }
+
+    uart_write_string("\r\n");
+}
+
+// Name: demo_monitor_thread
+// Description: Periodically reports hardware activity
+//              and registered thread states through UART.
+// Parameters: argument - Unused thread argument.
+// Returns: Does not return.
+static void demo_monitor_thread(void *argument)
 {
     (void)argument;
 
     for (;;)
     {
-        // Suspend this thread for two seconds
-        context_switch_sleep(2000U);
+        context_switch_sleep(DEMO_REPORT_INTERVAL_MS);
 
-        g_thread_b_reports++;
+        uint32_t now = systick_get_milliseconds();
 
-        uart_write_string("\r\n[JuracicRTOS Threads] ");
+        // Print compact system information
+        uart_write_string("\r\n=== JuracicRTOS Threads | ");
 
-        uart_write_uint32(
-            systick_get_milliseconds() / 1000U
-        );
+        uart_write_uint32(now / 1000U);
+        uart_write_string("s ===\r\n");
 
-        uart_write_string("s\r\n");
+        uart_write_string("LED Toggles: ");
+        uart_write_uint32(g_led_toggles);
 
-        // Report Thread A's LED activity
-        uart_write_string("LED toggles: ");
-        uart_write_uint32(g_thread_a_toggles);
-
-        uart_write_string(" | Reports: ");
-        uart_write_uint32(g_thread_b_reports);
+        uart_write_string(" | Button Presses: ");
+        uart_write_uint32(g_button_presses);
         uart_write_string("\r\n");
 
-        // Report actual thread changes
-        uart_write_string("Context switches: ");
-        uart_write_uint32(context_switch_get_count());
-        uart_write_string("\r\n");
-
-        // Inspect Thread A's current scheduling state
-        uart_write_string("Thread A state: ");
-
-        if (context_switch_get_thread_state(0U) ==
-            CONTEXT_THREAD_SLEEPING)
-        {
-            uart_write_string("SLEEPING\r\n");
-        }
-        else
-        {
-            uart_write_string("READY or RUNNING\r\n");
-        }
+        // Print registered thread information
+        demo_report_threads();
     }
 }
 
 // Name: demo_idle_thread
-// Description: Waits for interrupts when no user thread
-//              is currently available to execute.
-// Parameters: argument - Unused task argument.
+// Description: Waits for interrupts when no application
+//              thread is ready to execute.
+// Parameters: argument - Unused thread argument.
 // Returns: Does not return.
 static void demo_idle_thread(void *argument)
 {
@@ -122,46 +220,52 @@ static void demo_idle_thread(void *argument)
 
     for (;;)
     {
-        // Sleep until an interrupt occurs
         __asm volatile ("wfi");
     }
 }
 
 // Name: context_demo_start
-// Description: Initializes and starts two user threads
-//              and one idle thread with independent stacks.
+// Description: Initializes hardware, prepares independent
+//              stacks, registers threads, and starts the kernel.
 // Parameters: None
 // Returns: Does not return during normal operation.
 void context_demo_start(void)
 {
     // Initialize demonstration hardware
     gpio_led_init();
+    gpio_button_init();
     systick_init();
     uart_init();
 
     uart_write_string(
-        "\r\nJuracicRTOS thread-state demo\r\n"
+        "\r\nJuracicRTOS thread registration demo\r\n"
     );
 
-    // Prepare Thread A
-    uint8_t a_ready = task_context_init(
-        &g_thread_a_context,
-        g_thread_a_stack,
+    // Prepare all independent task contexts
+    uint8_t led_ready = task_context_init(
+        &g_led_context,
+        g_led_stack,
         DEMO_STACK_WORDS,
-        demo_thread_a,
+        demo_led_thread,
         0
     );
 
-    // Prepare Thread B
-    uint8_t b_ready = task_context_init(
-        &g_thread_b_context,
-        g_thread_b_stack,
+    uint8_t button_ready = task_context_init(
+        &g_button_context,
+        g_button_stack,
         DEMO_STACK_WORDS,
-        demo_thread_b,
+        demo_button_thread,
         0
     );
 
-    // Prepare the Idle Thread
+    uint8_t monitor_ready = task_context_init(
+        &g_monitor_context,
+        g_monitor_stack,
+        DEMO_STACK_WORDS,
+        demo_monitor_thread,
+        0
+    );
+
     uint8_t idle_ready = task_context_init(
         &g_idle_context,
         g_idle_stack,
@@ -170,13 +274,14 @@ void context_demo_start(void)
         0
     );
 
-    // Check initial stack creation
-    if ((a_ready == 0U) ||
-        (b_ready == 0U) ||
+    // Stop if any stack could not be prepared
+    if ((led_ready == 0U) ||
+        (button_ready == 0U) ||
+        (monitor_ready == 0U) ||
         (idle_ready == 0U))
     {
         uart_write_string(
-            "ERROR: Stack initialization failed\r\n"
+            "ERROR: Thread stack initialization failed\r\n"
         );
 
         for (;;)
@@ -185,16 +290,11 @@ void context_demo_start(void)
         }
     }
 
-    // Validate each prepared register frame
-    if ((task_context_check_initial_frame(
-            &g_thread_a_context) == 0U) ||
-        (task_context_check_initial_frame(
-            &g_thread_b_context) == 0U) ||
-        (task_context_check_initial_frame(
-            &g_idle_context) == 0U))
+    // Initialize the generalized thread scheduler
+    if (context_switch_init(&g_idle_context) == 0U)
     {
         uart_write_string(
-            "ERROR: Stack validation failed\r\n"
+            "ERROR: Kernel initialization failed\r\n"
         );
 
         for (;;)
@@ -203,28 +303,38 @@ void context_demo_start(void)
         }
     }
 
-    // Configure our three-thread scheduler
-    context_switch_configure(
-        &g_thread_a_context,
-        &g_thread_b_context,
-        &g_idle_context
+    // Register application threads by name
+    if ((context_switch_add_thread(
+            "LED", &g_led_context) == 0U) ||
+        (context_switch_add_thread(
+            "Button", &g_button_context) == 0U) ||
+        (context_switch_add_thread(
+            "Monitor", &g_monitor_context) == 0U))
+    {
+        uart_write_string(
+            "ERROR: Thread registration failed\r\n"
+        );
+
+        for (;;)
+        {
+            __asm volatile ("wfi");
+        }
+    }
+
+    uart_write_string(
+        "Registered 3 application threads + Idle\r\n"
     );
 
-    // Enable timer-driven scheduling
+    // Enable SysTick-driven scheduling
     context_switch_enable_preemption();
 
     uart_write_string(
-        "Three thread stacks ready\r\n"
+        "Starting generalized preemptive scheduler\r\n"
     );
 
-    uart_write_string(
-        "Starting the thread-state scheduler\r\n"
-    );
-
-    // Launch the initial thread through SVC
+    // Launch the first registered thread through SVC
     context_switch_start();
 
-    // Execution should never reach this section
     for (;;)
     {
         __asm volatile ("wfi");
