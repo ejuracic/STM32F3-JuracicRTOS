@@ -18,6 +18,7 @@
 
  
 
+
 #include <stdint.h>
 #include "gpio.h"
 #include "systick.h"
@@ -25,10 +26,23 @@
 #include "adc.h"
 #include "gyro.h"
 #include "gyro_processing.h"
+#include "scheduler.h"
+#include "task_context.h"
+#include "context_demo.h"
+
+// Set to 1 for the PendSV two-thread demonstration
+// Set to 0 for the normal JuracicRTOS application
+#define JURACIC_CONTEXT_DEMO 0U
 
 // Timing configuration
 #define LED_BLINK_INTERVAL_MS 500U
 #define BUTTON_DEBOUNCE_MS 30U
+
+// DWT cycle conversion for the current 8 MHz CPU clock
+#define CPU_CYCLES_PER_US 8U
+
+// One demonstration stack containing 256 32-bit words
+#define TASK_STACK_WORDS 256U
 
 // LED operating modes
 typedef enum
@@ -64,10 +78,43 @@ typedef struct
     uint32_t last_change_ms;
 } ButtonDebouncer;
 
+// Shared application context
+typedef struct
+{
+    SystemState state;
+    ButtonDebouncer button;
+    GyroProcessor gyro_processing;
+} AppContext;
+
+
+// Reserved stack for our first future thread
+static uint32_t g_demo_stack[TASK_STACK_WORDS]
+    __attribute__((aligned(8)));
+
+// Saved execution context for the demonstration thread
+static TaskContext g_demo_context;
+
+
+// Name: demo_thread
+// Description: Placeholder thread used to demonstrate
+//              independent task stack initialization.
+// Parameters: argument - Optional thread-specific context.
+// Returns: Does not return.
+static void demo_thread(void *argument)
+{
+    (void)argument;
+
+    // This function is not executed during Lesson 15
+    for (;;)
+    {
+        __asm volatile ("wfi");
+    }
+}
+
 // Name: led_set
-// Description: Controls the blue LED and updates the system state.
-// Parameters: state - Pointer to the system state.
-//             on - Desired LED state (1 = ON, 0 = OFF).
+// Description: Updates the LED output and system state.
+// Parameters: state - Pointer to system state.
+//             on - Requested LED state.
 // Returns: None
 static void led_set(SystemState *state, uint8_t on)
 {
@@ -84,29 +131,28 @@ static void led_set(SystemState *state, uint8_t on)
 }
 
 // Name: button_update
-// Description: Debounces the USER button and detects new press events.
-// Parameters: button - Pointer to the button debounce state.
-//             now - Current system time in milliseconds.
-// Returns: 1 when a new stable button press is detected,
-//          0 otherwise.
-static uint8_t button_update(ButtonDebouncer *button, uint32_t now)
+// Description: Debounces the USER button using SysTick time.
+// Parameters: button - Pointer to debounce state.
+//             now - Current uptime in milliseconds.
+// Returns: 1 for a new stable press, otherwise 0.
+static uint8_t button_update(
+    ButtonDebouncer *button,
+    uint32_t now
+)
 {
     uint8_t raw = gpio_button_is_pressed();
 
-    // Detect changes in the raw button signal
     if (raw != button->raw_state)
     {
         button->raw_state = raw;
         button->last_change_ms = now;
     }
 
-    // Accept a new state only after the debounce interval
     if ((button->stable_state != button->raw_state) &&
-        ((uint32_t)(now - button->last_change_ms) >= BUTTON_DEBOUNCE_MS))
+        ((uint32_t)(now - button->last_change_ms)
+         >= BUTTON_DEBOUNCE_MS))
     {
         button->stable_state = button->raw_state;
-
-        // Only report a newly confirmed button press
         return button->stable_state;
     }
 
@@ -114,10 +160,9 @@ static uint8_t button_update(ButtonDebouncer *button, uint32_t now)
 }
 
 // Name: led_next_mode
-// Description: Cycles through the LED operating modes and updates
-//              the LED output according to the newly selected mode.
-// Parameters: state - Pointer to the system state.
-//             now - Current system time in milliseconds.
+// Description: Changes to the next LED operating mode.
+// Parameters: state - Pointer to system state.
+//             now - Current uptime in milliseconds.
 // Returns: None
 static void led_next_mode(SystemState *state, uint32_t now)
 {
@@ -149,289 +194,338 @@ static void led_next_mode(SystemState *state, uint32_t now)
     }
 }
 
+// Name: task_button
+// Description: Updates button state and changes LED modes
+//              when a new debounced press is detected.
+// Parameters: context - Pointer to the application context.
+// Returns: None
+static void task_button(void *context)
+{
+    AppContext *app = (AppContext *)context;
+    uint32_t now = systick_get_milliseconds();
+
+    app->state.uptime_ms = now;
+
+    if (button_update(&app->button, now) != 0U)
+    {
+        app->state.button_press_count++;
+        led_next_mode(&app->state, now);
+    }
+
+    app->state.button_pressed = app->button.stable_state;
+}
+
+// Name: task_led
+// Description: Updates the LED when blinking mode is active.
+// Parameters: context - Pointer to the application context.
+// Returns: None
+static void task_led(void *context)
+{
+    AppContext *app = (AppContext *)context;
+    uint32_t now = systick_get_milliseconds();
+
+    if ((app->state.mode == LED_MODE_BLINK) &&
+        ((uint32_t)(now - app->state.last_toggle_ms)
+         >= LED_BLINK_INTERVAL_MS))
+    {
+        app->state.last_toggle_ms = now;
+
+        led_set(
+            &app->state,
+            (app->state.led_on == 0U) ? 1U : 0U
+        );
+    }
+}
+
+// Name: task_gyro
+// Description: Samples the gyroscope and updates calibration
+//              and filtered measurements.
+// Parameters: context - Pointer to the application context.
+// Returns: None
+static void task_gyro(void *context)
+{
+    AppContext *app = (AppContext *)context;
+
+    if (app->state.gyro_ready == 0U)
+    {
+        return;
+    }
+
+    if (gyro_read_axes(&app->state.gyro_axes) != 0U)
+    {
+        gyro_processor_update(
+            &app->gyro_processing,
+            &app->state.gyro_axes
+        );
+    }
+    else
+    {
+        app->state.gyro_ready = 0U;
+    }
+}
+
+
+
+// Name: report_scheduler_diagnostics
+// Description: Prints compact scheduler execution statistics.
+// Parameters: None
+// Returns: None
+static void report_scheduler_diagnostics(void)
+{
+    uart_write_string("\r\n--- Scheduler Diagnostics ---\r\n");
+
+    uint32_t count = scheduler_get_task_count();
+
+    for (uint32_t i = 0U; i < count; i++)
+    {
+        SchedulerTaskStats stats;
+
+        if (scheduler_get_task_stats(i, &stats) == 0U)
+        {
+            continue;
+        }
+
+        uart_write_string(stats.name);
+
+        uart_write_string(": runs=");
+        uart_write_uint32(stats.execution_count);
+
+        uart_write_string(" skips=");
+        uart_write_uint32(stats.skipped_periods);
+
+        uart_write_string(" late=");
+        uart_write_uint32(stats.max_lateness_ms);
+        uart_write_string("ms");
+
+        uart_write_string(" max=");
+        if (scheduler_profiling_available() != 0U)
+        {
+            uart_write_uint32(
+                stats.max_execution_cycles / CPU_CYCLES_PER_US
+            );
+            uart_write_string("us");
+        }
+        else
+        {
+            uart_write_string("N/A");
+        }
+
+        uart_write_string("\r\n");
+    }
+}
+
+
+
+// Name: task_monitor
+// Description: Updates sensor measurements and prints
+//              compact system and scheduler information.
+// Parameters: context - Pointer to application context.
+// Returns: None
+static void task_monitor(void *context)
+{
+    AppContext *app = (AppContext *)context;
+    SystemState *state = &app->state;
+    GyroProcessor *gyro = &app->gyro_processing;
+
+    static uint32_t last_diagnostics_ms = 0U;
+
+    state->uptime_ms = systick_get_milliseconds();
+
+    // Update ADC measurements
+    state->temperature_adc_raw = adc_temperature_read_raw();
+    state->vrefint_adc_raw = adc_vrefint_read_raw();
+
+    state->vdda_mv =
+        adc_get_vdda_mv(state->vrefint_adc_raw);
+
+    state->temperature_c = adc_temperature_celsius(
+        state->temperature_adc_raw,
+        state->vrefint_adc_raw
+    );
+
+    // Print system uptime
+    uart_write_string("\r\n=== JuracicRTOS | ");
+    uart_write_uint32(state->uptime_ms / 1000U);
+    uart_write_string("s ===\r\n");
+
+    // Print LED mode
+    uart_write_string("LED: ");
+
+    switch (state->mode)
+    {
+        case LED_MODE_BLINK:
+            uart_write_string("BLINK");
+            break;
+
+        case LED_MODE_ON:
+            uart_write_string("ON");
+            break;
+
+        case LED_MODE_OFF:
+            uart_write_string("OFF");
+            break;
+
+        default:
+            uart_write_string("UNKNOWN");
+            break;
+    }
+
+    // Print button information
+    uart_write_string(" | Button Presses: ");
+    uart_write_uint32(state->button_press_count);
+    uart_write_string("\r\n");
+
+    // Print temperature and voltage
+    uart_write_string("Temperature: ");
+
+    if (state->vrefint_adc_raw != 0U)
+    {
+        uart_write_int32(state->temperature_c);
+        uart_write_string(" C | VDDA: ");
+        uart_write_uint32(state->vdda_mv);
+        uart_write_string(" mV\r\n");
+    }
+    else
+    {
+        uart_write_string("UNAVAILABLE\r\n");
+    }
+
+    // Print filtered gyroscope measurements
+    uart_write_string("Gyro: ");
+
+    if (state->gyro_ready == 0U)
+    {
+        uart_write_string("NOT READY\r\n");
+    }
+    else if (gyro->calibrated == 0U)
+    {
+        uart_write_string("CALIBRATING (");
+        uart_write_uint32(gyro->samples_collected);
+        uart_write_string("/64)\r\n");
+    }
+    else
+    {
+        uart_write_string("Filtered X=");
+        uart_write_int32(gyro->filtered_x);
+
+        uart_write_string(" Y=");
+        uart_write_int32(gyro->filtered_y);
+
+        uart_write_string(" Z=");
+        uart_write_int32(gyro->filtered_z);
+
+        uart_write_string("\r\n");
+    }
+
+    // Print scheduler diagnostics every 10 seconds
+    if ((uint32_t)(state->uptime_ms - last_diagnostics_ms)
+        >= 10000U)
+    {
+        last_diagnostics_ms = state->uptime_ms;
+        report_scheduler_diagnostics();
+    }
+}
+
+
 int main(void)
 {
-    // Initialize hardware drivers
+    #if JURACIC_CONTEXT_DEMO
+        // Run the separate PendSV demonstration instead
+        // of the normal cooperative scheduler
+        context_demo_start();
+    #endif
+
+    // Initialize existing hardware drivers
     gpio_led_init();
     gpio_button_init();
     systick_init();
-
-    // Initialize UART communication
     uart_init();
-
-    // Initialize ADC and internal temperature sensor
     adc_temperature_init();
 
-    // Initialize SPI gyroscope
     uint8_t detected_gyro_id = gyro_init();
-    
-    uart_write_string("JuracicRTOS initialized\r\n");
 
     uint32_t now = systick_get_milliseconds();
-    uint32_t last_report_ms = now;
     uint8_t initial_button = gpio_button_is_pressed();
 
-    // Initialize system state
-    SystemState state = {
-        .mode = LED_MODE_BLINK,
-        .led_on = 0U,
-        .button_pressed = initial_button,
-        .button_press_count = 0U,
-        .uptime_ms = now,
-        .last_toggle_ms = now,
-        .temperature_adc_raw = 0U,
-        .temperature_c = 0,
-        .vrefint_adc_raw = 0U,
-        .vdda_mv = 0U,
-        .gyro_id = detected_gyro_id,
-        .gyro_ready = (detected_gyro_id == 0xD4U ||
-                    detected_gyro_id == 0xD3U) ? 1U : 0U,
-        .gyro_axes = {0}
-    };
+    // Initialize shared application context
+    AppContext app = {0};
 
-    // Initialize button debounce state
-    ButtonDebouncer button = {
-        .raw_state = initial_button,
-        .stable_state = initial_button,
-        .last_change_ms = now
-    };
+    app.state.mode = LED_MODE_BLINK;
+    app.state.button_pressed = initial_button;
+    app.state.uptime_ms = now;
+    app.state.last_toggle_ms = now;
+    app.state.gyro_id = detected_gyro_id;
 
-    // Initialize gyroscope calibration and filtering
-    GyroProcessor gyro_processing;
-    gyro_processor_init(&gyro_processing);
+    app.state.gyro_ready =
+        (detected_gyro_id == 0xD4U ||
+         detected_gyro_id == 0xD3U) ? 1U : 0U;
 
-    // Start in blinking mode
-    led_set(&state, 1U);
+    // Initialize button debounce information
+    app.button.raw_state = initial_button;
+    app.button.stable_state = initial_button;
+    app.button.last_change_ms = now;
 
-    // Track time between gyroscope measurements
-    uint32_t last_gyro_sample_ms = now;
+    // Initialize gyroscope processing
+    gyro_processor_init(&app.gyro_processing);
 
-    for (;;)
+    // Start the blue LED in blinking mode
+    led_set(&app.state, 1U);
+
+    // Initialize the cooperative scheduler
+    scheduler_init();
+
+
+    // Prepare an independent task stack for future context switching
+    if (task_context_init(
+            &g_demo_context,
+            g_demo_stack,
+            TASK_STACK_WORDS,
+            demo_thread,
+            0
+        ) == 0U)
     {
-        now = systick_get_milliseconds();
+        uart_write_string("Task stack initialization FAILED\r\n");
 
-        // Update system uptime
-        state.uptime_ms = now;
-
- 
-        // Sample gyroscope every 100 milliseconds
-        if ((uint32_t)(now - last_gyro_sample_ms) >= 100U)
+        for (;;)
         {
-            last_gyro_sample_ms = now;
-
-            if (state.gyro_ready != 0U)
-            {
-                // Read the latest gyroscope measurements
-                if (gyro_read_axes(&state.gyro_axes) != 0U)
-                {
-                    // Update calibration and filtered measurements
-                    gyro_processor_update(&gyro_processing, &state.gyro_axes);
-                }
-                else
-                {
-                    state.gyro_ready = 0U;
-                }
-            }
+            __asm volatile ("wfi");
         }
-
-
-        // Check for a debounced button press
-        if (button_update(&button, now) != 0U)
-        {
-            state.button_press_count++;
-
-            // Switch to the next LED operating mode
-            led_next_mode(&state, now);
-        }
-
-        // Store the confirmed button state
-        state.button_pressed = button.stable_state;
-
-        // Handle automatic blinking
-        if ((state.mode == LED_MODE_BLINK) &&
-            ((uint32_t)(now - state.last_toggle_ms) >= LED_BLINK_INTERVAL_MS))
-        {
-            state.last_toggle_ms = now;
-
-            // Toggle the existing LED state
-            led_set(&state, (state.led_on == 0U) ? 1U : 0U);
-        }
-
-        // Transmit system status once per second
-        if ((uint32_t)(now - last_report_ms) >= 1000U)
-        {
-            last_report_ms = now;
-            
-            // Read internal temperature sensor
-            state.temperature_adc_raw = adc_temperature_read_raw();
-
-            // Read internal voltage reference
-            state.vrefint_adc_raw = adc_vrefint_read_raw();
-
-            // Calculate analog supply voltage
-            state.vdda_mv = adc_get_vdda_mv(state.vrefint_adc_raw);
-
-            // Calculate temperature using voltage compensation
-            state.temperature_c = adc_temperature_celsius(
-                state.temperature_adc_raw,
-                state.vrefint_adc_raw
-            );
-
-            uart_write_string("\r\n=== JuracicRTOS ===\r\n");
-
-            uart_write_string("Uptime: ");
-            uart_write_uint32(state.uptime_ms);
-            uart_write_string(" ms\r\n");
-
-            uart_write_string("LED Mode: ");
-
-            switch (state.mode)
-            {
-                case LED_MODE_BLINK:
-                    uart_write_string("BLINK\r\n");
-                    break;
-
-                case LED_MODE_ON:
-                    uart_write_string("ON\r\n");
-                    break;
-
-                case LED_MODE_OFF:
-                    uart_write_string("OFF\r\n");
-                    break;
-
-                default:
-                    uart_write_string("UNKNOWN\r\n");
-                    break;
-            }
-
-            uart_write_string("LED State: ");
-            uart_write_string(state.led_on ? "ON\r\n" : "OFF\r\n");
-
-            uart_write_string("Button Presses: ");
-            uart_write_uint32(state.button_press_count);
-            uart_write_string("\r\n");
-
-            uart_write_string("Button State: ");
-            uart_write_string(
-                state.button_pressed ? "PRESSED\r\n" : "RELEASED\r\n"
-            );
-
-            // Report raw temperature sensor ADC reading
-            uart_write_string("Temperature ADC: ");
-            uart_write_uint32(state.temperature_adc_raw);
-            uart_write_string("\r\n");
-            // Report internal voltage reference ADC reading
-            uart_write_string("VREFINT ADC: ");
-            uart_write_uint32(state.vrefint_adc_raw);
-            uart_write_string("\r\n");
-
-            // Report estimated analog supply voltage
-            uart_write_string("Analog Supply: ");
-
-            if (state.vdda_mv != 0U)
-            {
-                uart_write_uint32(state.vdda_mv);
-                uart_write_string(" mV\r\n");
-            }
-            else
-            {
-                uart_write_string("INVALID\r\n");
-            }
-
-            uart_write_string("MCU Temperature: ");
-
-            if (state.vrefint_adc_raw != 0U)
-            {
-                uart_write_int32(state.temperature_c);
-                uart_write_string(" C\r\n");
-            }
-            else
-            {
-                uart_write_string("INVALID\r\n");
-            }
-
-
-            // Report detected gyroscope identification
-            uart_write_string("Gyroscope ID: ");
-            uart_write_uint32(state.gyro_id);
-            uart_write_string("\r\n");
-
-            // Report raw gyroscope measurements
-            if (state.gyro_ready != 0U)
-            {
-                uart_write_string("Raw Gyro X: ");
-                uart_write_int32(state.gyro_axes.x);
-                uart_write_string("\r\n");
-
-                uart_write_string("Raw Gyro Y: ");
-                uart_write_int32(state.gyro_axes.y);
-                uart_write_string("\r\n");
-
-                uart_write_string("Raw Gyro Z: ");
-                uart_write_int32(state.gyro_axes.z);
-                uart_write_string("\r\n");
-            }
-            else
-            {
-                uart_write_string("Gyroscope: NOT READY\r\n");
-            }
-
-
-            // Report gyroscope calibration status
-            uart_write_string("Gyro Calibration: ");
-
-            if (gyro_processing.calibrated == 0U)
-            {
-                uart_write_string("IN PROGRESS (");
-                uart_write_uint32(gyro_processing.samples_collected);
-                uart_write_string("/64)\r\n");
-            }
-            else
-            {
-                uart_write_string("COMPLETE\r\n");
-
-                // Report calculated stationary offsets
-                uart_write_string("Gyro Offset X: ");
-                uart_write_int32(gyro_processing.offset_x);
-                uart_write_string("\r\n");
-
-                uart_write_string("Gyro Offset Y: ");
-                uart_write_int32(gyro_processing.offset_y);
-                uart_write_string("\r\n");
-
-                uart_write_string("Gyro Offset Z: ");
-                uart_write_int32(gyro_processing.offset_z);
-                uart_write_string("\r\n");
-
-                // Report calibrated values
-                uart_write_string("Calibrated X: ");
-                uart_write_int32(gyro_processing.calibrated_x);
-                uart_write_string("\r\n");
-
-                uart_write_string("Calibrated Y: ");
-                uart_write_int32(gyro_processing.calibrated_y);
-                uart_write_string("\r\n");
-
-                uart_write_string("Calibrated Z: ");
-                uart_write_int32(gyro_processing.calibrated_z);
-                uart_write_string("\r\n");
-
-                // Report filtered values
-                uart_write_string("Filtered X: ");
-                uart_write_int32(gyro_processing.filtered_x);
-                uart_write_string("\r\n");
-
-                uart_write_string("Filtered Y: ");
-                uart_write_int32(gyro_processing.filtered_y);
-                uart_write_string("\r\n");
-
-                uart_write_string("Filtered Z: ");
-                uart_write_int32(gyro_processing.filtered_z);
-                uart_write_string("\r\n");
-            }
-
-        }
-        // Sleep until the next interrupt
-        __asm volatile ("wfi");
     }
+
+    // Validate the initial register frame and stack guard
+    if (task_context_check_initial_frame(&g_demo_context) == 0U)
+    {
+        uart_write_string("Task stack validation FAILED\r\n");
+
+        for (;;)
+        {
+            __asm volatile ("wfi");
+        }
+    }
+
+    uart_write_string(
+        "Task stack prepared: 1024 bytes (not scheduled)\r\n"
+    );
+
+    // Register named periodic application tasks
+    if ((scheduler_add_task("Button", task_button, &app, 1U) == 0U) ||
+        (scheduler_add_task("LED", task_led, &app, 10U) == 0U) ||
+        (scheduler_add_task("Gyroscope", task_gyro, &app, 100U) == 0U) ||
+        (scheduler_add_task("Monitor", task_monitor, &app, 2000U) == 0U))
+    {
+        uart_write_string("Scheduler registration failed\r\n");
+
+        for (;;)
+        {
+            __asm volatile ("wfi");
+        }
+    }
+
+
+    uart_write_string("JuracicRTOS scheduler started\r\n");
+
+    // Transfer control to the cooperative scheduler
+    scheduler_run();
+
+    return 0;
 }
