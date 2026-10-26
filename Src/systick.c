@@ -1,6 +1,7 @@
 
 #include <stdint.h>
 #include "systick.h"
+#include "context_switch.h"
 
 // SysTick register addresses
 #define SYST_CSR  (*(volatile uint32_t *)0xE000E010UL)
@@ -55,4 +56,7 @@ uint32_t systick_get_milliseconds(void)
 void SysTick_Handler(void)
 {
     g_milliseconds++;
+
+    // Trigger preemption only when the thread kernel is active
+    context_switch_on_systick();
 }

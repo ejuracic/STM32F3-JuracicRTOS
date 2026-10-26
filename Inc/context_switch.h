@@ -28,6 +28,22 @@ void context_switch_start(void);
 // Returns: None
 void context_switch_yield(void);
 
+
+// Name: context_switch_enable_preemption
+// Description: Arms automatic thread switching once
+//              the first thread has started.
+// Parameters: None
+// Returns: None
+void context_switch_enable_preemption(void);
+
+// Name: context_switch_on_systick
+// Description: Called by SysTick to request a thread
+//              switch when preemption is active.
+// Parameters: None
+// Returns: None
+void context_switch_on_systick(void);
+
+
 // Name: context_switch_get_count
 // Description: Gets the number of completed thread switches.
 // Parameters: None

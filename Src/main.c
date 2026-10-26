@@ -32,7 +32,7 @@
 
 // Set to 1 for the PendSV two-thread demonstration
 // Set to 0 for the normal JuracicRTOS application
-#define JURACIC_CONTEXT_DEMO 1U
+#define JURACIC_CONTEXT_DEMO 0U
 
 // Timing configuration
 #define LED_BLINK_INTERVAL_MS 500U

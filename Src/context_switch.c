@@ -27,6 +27,14 @@ static TaskContext *g_switch_second_task = 0;
 // Number of completed PendSV switches
 volatile uint32_t g_switch_count = 0U;
 
+
+// Indicates that the first PSP-based thread has started
+volatile uint32_t g_switch_started = 0U;
+
+// Indicates that periodic preemption has been requested
+static volatile uint32_t g_preemption_enabled = 0U;
+
+
 // Name: context_switch_configure
 // Description: Initializes the two-thread switching system
 //              and sets PendSV to the lowest priority.
@@ -44,6 +52,8 @@ void context_switch_configure(
     g_switch_current_task = first;
     g_switch_next_task = second;
     g_switch_count = 0U;
+    g_switch_started = 0U;
+    g_preemption_enabled = 0U;
 
     // PendSV priority = 255, the lowest priority
     SCB_SHPR3 =
@@ -77,6 +87,41 @@ void context_switch_yield(void)
         ::: "memory"
     );
 }
+
+
+// Name: context_switch_enable_preemption
+// Description: Enables timer-based scheduling requests.
+//              Switching begins after SVC starts Thread A.
+// Parameters: None
+// Returns: None
+void context_switch_enable_preemption(void)
+{
+    g_preemption_enabled = 1U;
+}
+
+// Name: context_switch_on_systick
+// Description: Requests the next PendSV context switch
+//              after a SysTick interrupt.
+// Parameters: None
+// Returns: None
+void context_switch_on_systick(void)
+{
+    // Do nothing in the normal cooperative application
+    if (g_preemption_enabled == 0U)
+    {
+        return;
+    }
+
+    // Never switch before the first PSP thread has started
+    if (g_switch_started == 0U)
+    {
+        return;
+    }
+
+    // Select the other thread and pend PendSV
+    context_switch_yield();
+}
+
 
 // Name: context_switch_get_count
 // Description: Returns the completed context-switch count.
@@ -118,8 +163,14 @@ void SVC_Handler(void)
         // Restore the prepared R4-R11 values
         "ldmia r0!, {r4-r11}\n"
 
+        
         // PSP now points at the hardware exception frame
         "msr psp, r0\n"
+
+        // Mark the first thread as started
+        "ldr r1, =g_switch_started\n"
+        "movs r2, #1\n"
+        "str r2, [r1]\n"
 
         // Return to Thread mode using a basic PSP frame
         "ldr lr, =0xFFFFFFFD\n"

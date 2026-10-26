@@ -62,11 +62,10 @@ static void demo_thread_a(void *argument)
             g_thread_a_toggles++;
         }
 
-        // Sleep until an interrupt wakes the processor
-        __asm volatile ("wfi");
 
-        // Cooperatively hand execution to Thread B
-        context_switch_yield();
+        // Continue executing until SysTick preempts this thread
+        __asm volatile ("nop");
+
     }
 }
 
@@ -112,11 +111,8 @@ static void demo_thread_b(void *argument)
             uart_write_string("\r\n");
         }
 
-        // Sleep until an interrupt wakes the processor
-        __asm volatile ("wfi");
-
-        // Cooperatively hand execution to Thread A
-        context_switch_yield();
+        // Continue executing until SysTick preempts this thread
+        __asm volatile ("nop");
     }
 }
 
@@ -187,6 +183,9 @@ void context_demo_start(void)
         &g_thread_a_context,
         &g_thread_b_context
     );
+
+    // Arm SysTick-driven preemptive context switching
+    context_switch_enable_preemption();
 
     uart_write_string("Two thread stacks initialized\r\n");
     uart_write_string("Starting first thread through SVC\r\n");
