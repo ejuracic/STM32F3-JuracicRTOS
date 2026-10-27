@@ -5,6 +5,7 @@
 #include "task_context.h"
 #include "context_switch.h"
 #include "context_demo.h"
+#include "fault.h"
 
 // Demonstration configuration
 #define DEMO_STACK_WORDS 256U
@@ -12,6 +13,9 @@
 #define DEMO_BUTTON_INTERVAL_MS 10U
 #define DEMO_BUTTON_DEBOUNCE_MS 30U
 #define DEMO_REPORT_INTERVAL_MS 2000U
+
+// Set to 1 only during the deliberate fault test
+#define JURACIC_FAULT_TEST 0U
 
 // Four independent 1024-byte task stacks
 static uint32_t g_led_stack[DEMO_STACK_WORDS]
@@ -237,6 +241,21 @@ static void demo_monitor_thread(void *argument)
             last_stack_report_ms = now;
             demo_report_threads();
         }
+
+
+        #if JURACIC_FAULT_TEST
+                // Trigger one controlled fault after approximately 6 seconds
+                if (now >= 6000U)
+                {
+                    uart_write_string(
+                        "\r\nFAULT TEST: Triggering undefined instruction\r\n"
+                    );
+
+                    // Execution deliberately stops in the fault handler
+                    fault_test_trigger();
+                }
+        #endif
+
 
     }
 }
