@@ -41,6 +41,7 @@ target_sources(${PROJECT_NAME} PRIVATE
   Src/scheduler.c
   Src/task_context.c
   Src/context_switch.c
+  Src/fault.c
   Src/context_demo.c
 )
 

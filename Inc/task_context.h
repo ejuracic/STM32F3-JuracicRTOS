@@ -3,17 +3,39 @@
 
 #include <stdint.h>
 
+
+// Known values used to initialize each thread stack
+#define TASK_CONTEXT_STACK_GUARD 0xDEADC0DEUL
+#define TASK_CONTEXT_STACK_FILL  0xA5A5A5A5UL
+
+
 // Function executed when a task starts
 typedef void (*TaskEntryFunction)(void *argument);
 
 // A task's reserved stack and saved execution context
+
 typedef struct
 {
     uint32_t *stack_base;
     uint32_t *stack_top;
     uint32_t *saved_sp;
     uint32_t stack_words;
+
+    // Exception return value for this individual thread
+    uint32_t exc_return;
 } TaskContext;
+
+
+
+// Measurements from a thread's stack watermark
+typedef struct
+{
+    uint32_t usable_bytes;
+    uint32_t peak_used_bytes;
+    uint32_t minimum_free_bytes;
+    uint8_t guard_intact;
+} TaskStackStats;
+
 
 // Name: task_context_init
 // Description: Prepares a new task stack containing an
@@ -40,5 +62,19 @@ uint8_t task_context_init(
 uint8_t task_context_check_initial_frame(
     const TaskContext *task
 );
+
+
+// Name: task_context_get_stack_stats
+// Description: Checks a stack guard and estimates peak
+//              stack use using the initialization pattern.
+// Parameters: task - Thread context to inspect.
+//             output - Destination for stack statistics.
+// Returns: 1 for a valid inspection, 0 for invalid inputs.
+//          A damaged guard is reported through output.
+uint8_t task_context_get_stack_stats(
+    const TaskContext *task,
+    TaskStackStats *output
+);
+
 
 #endif
