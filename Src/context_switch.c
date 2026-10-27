@@ -7,6 +7,14 @@
 #define SCB_ICSR  (*(volatile uint32_t *)0xE000ED04UL)
 #define SCB_SHPR3 (*(volatile uint32_t *)0xE000ED20UL)
 
+// Cortex-M4F floating-point control registers
+#define SCB_CPACR (*(volatile uint32_t *)0xE000ED88UL)
+#define FPU_FPCCR (*(volatile uint32_t *)0xE000EF34UL)
+
+#define FPU_CP10_CP11_FULL_ACCESS (0xFUL << 20)
+#define FPU_FPCCR_ASPEN (1UL << 31)
+#define FPU_FPCCR_LSPEN (1UL << 30)
+
 #define PENDSV_SET (1UL << 28)
 
 // Reserve one additional slot for Idle
@@ -23,6 +31,13 @@ _Static_assert(
     offsetof(TaskContext, saved_sp) == 8U,
     "TaskContext.saved_sp must be at offset 8"
 );
+
+
+_Static_assert(
+    offsetof(TaskContext, exc_return) == 16U,
+    "TaskContext.exc_return must be at offset 16"
+);
+
 
 // Kernel Task Control Block
 typedef struct
@@ -50,6 +65,37 @@ volatile uint32_t g_switch_count = 0U;
 volatile uint32_t g_switch_started = 0U;
 
 static volatile uint32_t g_preemption_enabled = 0U;
+
+
+// Name: context_switch_fpu_init
+// Description: Enables hardware floating point and
+//              configures automatic eager FP stacking.
+// Parameters: None
+// Returns: None
+void context_switch_fpu_init(void)
+{
+    // Enable full access to CP10 and CP11
+    SCB_CPACR |= FPU_CP10_CP11_FULL_ACCESS;
+
+    // Synchronize after changing coprocessor access
+    __asm volatile (
+        "dsb\n"
+        "isb\n"
+        ::: "memory"
+    );
+
+    // Enable automatic FP state preservation
+    FPU_FPCCR |= FPU_FPCCR_ASPEN;
+
+    // Disable lazy stacking for predictable saving
+    FPU_FPCCR &= ~FPU_FPCCR_LSPEN;
+
+    __asm volatile (
+        "dsb\n"
+        "isb\n"
+        ::: "memory"
+    );
+}
 
 // Name: context_switch_init
 // Description: Resets the thread table and registers the
@@ -468,51 +514,74 @@ void SVC_Handler(void)
     );
 }
 
+
 // Name: PendSV_Handler
-// Description: Saves the outgoing thread, calls the
-//              scheduler, and restores the selected thread.
+// Description: Saves and restores integer and optional
+//              floating-point thread execution contexts.
 // Parameters: None
 // Returns: Through hardware exception return.
 __attribute__((naked))
 void PendSV_Handler(void)
 {
     __asm volatile (
-        // Prevent interrupting the kernel state update
+        // Protect the context-switching operation
         "cpsid i\n"
 
-        // Read the outgoing thread's process stack
+        // Get the outgoing thread's Process Stack Pointer
         "mrs r0, psp\n"
 
-        // Save the software-managed register context
+        // EXC_RETURN bit 4 indicates an extended FP frame
+        "tst lr, #0x10\n"
+        "it eq\n"
+
+        // Save S16-S31 if the outgoing thread used the FPU
+        "vstmdbeq r0!, {s16-s31}\n"
+
+        // Save the outgoing integer registers
         "stmdb r0!, {r4-r11}\n"
 
-        // Store the outgoing thread's saved stack pointer
+        // Obtain the outgoing TaskContext
         "ldr r1, =g_switch_current_task\n"
         "ldr r2, [r1]\n"
-        "str r0, [r2, #8]\n"
 
-        // Preserve exception return and 8-byte alignment
+        // Preserve its saved stack pointer and EXC_RETURN
+        "str r0, [r2, #8]\n"
+        "str lr, [r2, #16]\n"
+
+        // Preserve the handler's exception-return value
         "push {r3, lr}\n"
 
-        // Run the scheduling algorithm in C
+        // Select the next runnable thread
         "bl context_switch_select_next\n"
 
-        // Restore the handler's saved registers
+        // Restore handler registers
         "pop {r3, lr}\n"
 
-        // R0 contains the chosen TaskContext pointer
-        "ldr r0, [r0, #8]\n"
+        // R0 now points to the selected TaskContext
+        "ldr r1, [r0, #8]\n"
 
-        // Restore the selected thread's R4-R11
-        "ldmia r0!, {r4-r11}\n"
+        // Restore the incoming thread's integer registers
+        "ldmia r1!, {r4-r11}\n"
 
-        // PSP now points to its hardware exception frame
-        "msr psp, r0\n"
+        // Load its own saved EXC_RETURN
+        "ldr lr, [r0, #16]\n"
 
-        // Re-enable interrupts for exception return
+        // Check whether incoming FP context is extended
+        "tst lr, #0x10\n"
+        "it eq\n"
+
+        // Restore S16-S31 only when required
+        "vldmiaeq r1!, {s16-s31}\n"
+
+        // Set PSP for the incoming hardware exception frame
+        "msr psp, r1\n"
+        "isb\n"
+
+        // Restore interrupt handling
         "cpsie i\n"
 
-        // Resume the chosen thread
+        // Hardware restores the remaining exception frame
         "bx lr\n"
     );
 }
+

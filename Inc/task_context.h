@@ -13,13 +13,18 @@
 typedef void (*TaskEntryFunction)(void *argument);
 
 // A task's reserved stack and saved execution context
+
 typedef struct
 {
     uint32_t *stack_base;
     uint32_t *stack_top;
     uint32_t *saved_sp;
     uint32_t stack_words;
+
+    // Exception return value for this individual thread
+    uint32_t exc_return;
 } TaskContext;
+
 
 
 // Measurements from a thread's stack watermark

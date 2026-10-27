@@ -40,6 +40,64 @@ static TaskContext g_idle_context;
 static volatile uint32_t g_led_toggles = 0U;
 static volatile uint32_t g_button_presses = 0U;
 
+
+// Independent FPU test results for each application thread
+static volatile uint32_t g_led_fp_checks = 0U;
+static volatile uint32_t g_button_fp_checks = 0U;
+static volatile uint32_t g_monitor_fp_checks = 0U;
+
+static volatile uint32_t g_led_fp_failures = 0U;
+static volatile uint32_t g_button_fp_failures = 0U;
+static volatile uint32_t g_monitor_fp_failures = 0U;
+
+
+// Name: demo_fp_register_check
+// Description: Writes a test pattern into FPU register S16,
+//              sleeps while other threads execute, and
+//              verifies that S16 was restored correctly.
+// Parameters: expected_bits - Unique 32-bit test pattern.
+//             delay_ms - Time to suspend this thread.
+// Returns: 1 if S16 was preserved, otherwise 0.
+__attribute__((naked, noinline))
+static uint32_t demo_fp_register_check(
+    uint32_t expected_bits,
+    uint32_t delay_ms
+)
+{
+    __asm volatile (
+        // Preserve the caller's integer registers
+        "push {r4, lr}\n"
+
+        // Preserve the caller's original FP registers
+        "vpush {s16-s17}\n"
+
+        // Store the expected test pattern
+        "mov r4, r0\n"
+
+        // Load the pattern into floating-point register S16
+        "vmov s16, r0\n"
+
+        // Suspend this thread for the requested duration
+        "mov r0, r1\n"
+        "bl context_switch_sleep\n"
+
+        // Retrieve the register after the thread resumes
+        "vmov r0, s16\n"
+
+        // Check whether S16 retained its original value
+        "cmp r0, r4\n"
+        "ite eq\n"
+        "moveq r0, #1\n"
+        "movne r0, #0\n"
+
+        // Restore the caller's original FP state
+        "vpop {s16-s17}\n"
+
+        // Return the result and restore integer registers
+        "pop {r4, pc}\n"
+    );
+}
+
 // Name: demo_led_thread
 // Description: Toggles the blue LED every 500 ms.
 // Parameters: argument - Unused thread argument.
@@ -54,7 +112,17 @@ static void demo_led_thread(void *argument)
 
     for (;;)
     {
-        context_switch_sleep(DEMO_LED_INTERVAL_MS);
+
+        // Preserve 1.25f's IEEE-754 bit pattern across a sleep
+        if (demo_fp_register_check(
+                0x3FA00000UL,
+                DEMO_LED_INTERVAL_MS) == 0U)
+        {
+            g_led_fp_failures++;
+        }
+
+        g_led_fp_checks++;
+
 
         led_on = (led_on == 0U) ? 1U : 0U;
 
@@ -110,8 +178,17 @@ static void demo_button_thread(void *argument)
             }
         }
 
-        // Suspend the button thread until its next poll
-        context_switch_sleep(DEMO_BUTTON_INTERVAL_MS);
+
+        // Preserve 3.5f's bit pattern across a 10 ms sleep
+        if (demo_fp_register_check(
+                0x40600000UL,
+                DEMO_BUTTON_INTERVAL_MS) == 0U)
+        {
+            g_button_fp_failures++;
+        }
+
+        g_button_fp_checks++;
+
     }
 }
 
@@ -207,7 +284,17 @@ static void demo_monitor_thread(void *argument)
 
     for (;;)
     {
-        context_switch_sleep(DEMO_REPORT_INTERVAL_MS);
+
+        // Preserve 5.5f's bit pattern across a two-second sleep
+        if (demo_fp_register_check(
+                0x40B00000UL,
+                DEMO_REPORT_INTERVAL_MS) == 0U)
+        {
+            g_monitor_fp_failures++;
+        }
+
+        g_monitor_fp_checks++;
+
 
         uint32_t now = systick_get_milliseconds();
 
@@ -232,6 +319,41 @@ static void demo_monitor_thread(void *argument)
         uart_write_string(" | Switches: ");
         uart_write_uint32(context_switch_get_count());
         uart_write_string("\r\n");
+
+
+        // Report successful FPU register-check attempts
+        uart_write_string("FP Checks: LED=");
+        uart_write_uint32(g_led_fp_checks);
+
+        uart_write_string(" Button=");
+        uart_write_uint32(g_button_fp_checks);
+
+        uart_write_string(" Monitor=");
+        uart_write_uint32(g_monitor_fp_checks);
+        uart_write_string("\r\n");
+
+        // Report all failed register-preservation checks
+        uint32_t fp_failures =
+            g_led_fp_failures +
+            g_button_fp_failures +
+            g_monitor_fp_failures;
+
+        uart_write_string("FP Register Failures: ");
+        uart_write_uint32(fp_failures);
+        uart_write_string("\r\n");
+
+        // Exercise hardware floating-point arithmetic in C
+        float calculation =
+            ((float)g_led_toggles * 0.25f) +
+            ((float)g_button_presses * 0.5f);
+
+        uint32_t scaled_result =
+            (uint32_t)(calculation * 10.0f);
+
+        uart_write_string("FP Arithmetic x10: ");
+        uart_write_uint32(scaled_result);
+        uart_write_string("\r\n");
+
 
         // Collect detailed stack statistics every 10 seconds
         static uint32_t last_stack_report_ms = 0U;
@@ -287,6 +409,9 @@ void context_demo_start(void)
     gpio_button_init();
     systick_init();
     uart_init();
+
+    // Enable the Cortex-M4F FPU before launching threads
+    context_switch_fpu_init();
 
     uart_write_string(
         "\r\nJuracicRTOS thread registration demo\r\n"

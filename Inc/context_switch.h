@@ -108,4 +108,13 @@ ContextThreadState context_switch_get_thread_state(
     uint32_t index
 );
 
+
+// Name: context_switch_fpu_init
+// Description: Enables the Cortex-M4F floating-point unit
+//              and configures eager FP context stacking.
+// Parameters: None
+// Returns: None
+void context_switch_fpu_init(void);
+
+
 #endif

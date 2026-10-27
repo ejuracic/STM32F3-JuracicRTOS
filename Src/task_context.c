@@ -95,6 +95,8 @@ uint8_t task_context_init(
     task->stack_top = &stack[stack_words];
     task->saved_sp = sp;
     task->stack_words = stack_words;
+    // New threads begin with a basic PSP exception frame
+    task->exc_return = 0xFFFFFFFDUL;
 
     return 1U;
 }
